@@ -1,0 +1,10 @@
+# Rust
+/target
+
+# Local settings with passwords (copy .env.example)
+.env
+
+# Editors / OS
+.idea
+.DS_Store
+*.code-workspace

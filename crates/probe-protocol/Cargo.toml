@@ -1,0 +1,25 @@
+[package]
+name = "probe-protocol"
+description = "Wire types shared by probe-server and the TypeScript client (exported with ts-rs)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+# Derives sqlx::Type for the Postgres enums. Only the server turns it on,
+# so the protocol crate stays free of database code for other users (later: the mower).
+sqlx = ["dep:sqlx"]
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+sqlx = { workspace = true, optional = true }
+ts-rs.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
