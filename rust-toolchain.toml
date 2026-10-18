@@ -1,0 +1,6 @@
+# Pin the exact stable release so local, CI and Docker builds use the same compiler.
+# Bump it on purpose (and the `rust:` tag in the Dockerfile together with it).
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

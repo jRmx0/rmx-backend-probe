@@ -1,0 +1,20 @@
+# dependencies (bun install)
+node_modules
+
+# output
+out
+dist
+*.tgz
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+*.log
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo

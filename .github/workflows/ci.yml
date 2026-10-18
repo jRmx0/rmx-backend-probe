@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded PR runs are cancelled; runs on main and tags always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Compile-time checked queries use the committed .sqlx data.
+  SQLX_OFFLINE: "true"
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, unit tests)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - name: Generated TypeScript types are up to date
+        run: |
+          # cargo test re-exported client/src/generated; any difference means
+          # the committed copy is stale. Fix: cargo test -p probe-protocol, commit.
+          git add -N client/src/generated
+          git diff --exit-code -- client/src/generated
+
+  client:
+    name: Client (eslint, tsc, bun test, build)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('client/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run build
+
+  integration:
+    name: Integration tests (TimescaleDB + Mosquitto)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      # The same compose file as local development. (GitHub "service
+      # containers" start before checkout, so they can't mount Mosquitto's
+      # config files; compose can, and keeps CI identical to local.)
+      - name: Start TimescaleDB and Mosquitto
+        run: |
+          cp .env.example .env
+          docker compose -f compose.dev.yaml up -d --wait
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: integration
+      - run: cargo test -p probe-server --features integration-tests --test integration --locked
+      - name: Service logs
+        if: failure()
+        run: docker compose -f compose.dev.yaml logs
+
+  image:
+    name: Docker image
+    needs: [rust, client, integration]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/jrmx0/rmx-backend-probe
+          tags: |
+            type=sha,prefix=sha-,format=short,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=pr
+      # On pull requests the image is only built (to test the Dockerfile), not pushed.
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------------------
+  # PLACEHOLDER — disabled. Automatic deploy on merge to main is set up in a
+  # separate session together with the VPS side:
+  #   - a restricted SSH key whose authorized_keys entry forces one deploy
+  #     script (no shell),
+  #   - repository secrets DEPLOY_HOST, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS,
+  #   - the script pulls ghcr.io/jrmx0/rmx-backend-probe:sha-<short> and
+  #     restarts the `probe` Compose profile.
+  # Remove `if: false` once that exists.
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy to VPS (placeholder)
+    if: false
+    needs: [image]
+    runs-on: ubuntu-24.04
+    environment: production
+    steps:
+      - run: echo "not configured yet"

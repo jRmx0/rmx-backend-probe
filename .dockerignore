@@ -1,0 +1,12 @@
+# Keep the build context small and free of local secrets.
+.git
+.github
+target
+**/node_modules
+client/dist
+.env
+.env.*
+!.env.example
+*.log
+.vscode
+.idea

@@ -1,0 +1,39 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO record_events (connection_type, op, record_id, value) VALUES ($1, $2, $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "connection_type",
+            "kind": {
+              "Enum": [
+                "https",
+                "wss",
+                "mqtt"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "record_op",
+            "kind": {
+              "Enum": [
+                "create",
+                "update",
+                "delete"
+              ]
+            }
+          }
+        },
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0b4edf5290327fa196612990445c2466f74716677885d916dae48cafd00e7260"
+}

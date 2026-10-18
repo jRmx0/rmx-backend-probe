@@ -1,0 +1,45 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/jRmx0/rmx-backend-probe"
+publish = false
+
+[workspace.dependencies]
+probe-protocol = { path = "crates/probe-protocol" }
+
+anyhow = "1"
+axum = { version = "0.8", features = ["ws"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+dotenvy = "0.15"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+rand = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+rumqttc = { version = "0.25", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.9", default-features = false, features = ["chrono", "derive", "macros", "migrate", "postgres", "runtime-tokio"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = "0.30"
+tokio-util = "0.7"
+tower-http = { version = "0.7", features = ["fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+ts-rs = { version = "12", features = ["chrono-impl"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+# Small binary and low memory: the VPS has ~1 GB RAM.
+codegen-units = 1
+lto = "thin"
+strip = true

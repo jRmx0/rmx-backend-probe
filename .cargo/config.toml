@@ -1,0 +1,4 @@
+[env]
+# `cargo test -p probe-protocol` writes the generated TypeScript types here.
+# CI regenerates them and fails if the committed copy is out of date.
+TS_RS_EXPORT_DIR = { value = "client/src/generated", relative = true }
