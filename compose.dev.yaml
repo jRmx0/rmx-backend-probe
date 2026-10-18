@@ -1,0 +1,54 @@
+# Local development and CI stack: TimescaleDB + Mosquitto.
+#   docker compose -f compose.dev.yaml up -d --wait
+# Ports bind to 127.0.0.1 only, on unusual numbers so they don't clash with a
+# Postgres or Mosquitto already installed on the PC.
+name: rmx-probe-dev
+
+services:
+  db:
+    image: timescale/timescaledb:2.30.2-pg17
+    environment:
+      POSTGRES_USER: probe
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-probe-dev}
+      POSTGRES_DB: probe
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U probe -d probe"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mosquitto:
+    image: eclipse-mosquitto:2.1-alpine
+    # Build the password file from .env, then start the broker.
+    # ($$ is a literal $ for the container's shell.)
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        mosquitto_passwd -c -b /mosquitto/data/passwd probe-app "$$PROBE_APP_PASSWORD"
+        mosquitto_passwd -b /mosquitto/data/passwd probe-web "$$PROBE_WEB_PASSWORD"
+        chown mosquitto:mosquitto /mosquitto/data/passwd
+        chmod 0600 /mosquitto/data/passwd
+        exec mosquitto -c /mosquitto/config/mosquitto.conf
+    environment:
+      PROBE_APP_PASSWORD: ${MQTT_PASSWORD:-probe-app-dev}
+      PROBE_WEB_PASSWORD: ${PROBE_WEB_PASSWORD:-probe-web-dev}
+    ports:
+      - "127.0.0.1:11883:1883"
+      - "127.0.0.1:19001:9001"
+    volumes:
+      - ./dev/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./dev/mosquitto/acl:/mosquitto/config/acl:ro
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 1883"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  db-data:

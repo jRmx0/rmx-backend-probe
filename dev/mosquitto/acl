@@ -1,0 +1,6 @@
+# Same as the VPS: both probe logins may use probe/# only.
+user probe-app
+topic readwrite probe/#
+
+user probe-web
+topic readwrite probe/#
