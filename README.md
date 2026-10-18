@@ -309,9 +309,19 @@ UI. It uses client ids `web-<12 hex>`, so the broker must not force
 It needs read/write on `probe/#` (narrowest: write `probe/req/+`, read
 `probe/res/+`, `probe/events/#`, `probe/status/#`).
 
-**Deploy job:** the `deploy` job in `ci.yml` is a disabled placeholder. The VPS
-session adds a restricted SSH key (forced command running one deploy script),
-the repository secrets, and then enables the job.
+**Deploy job:** every push to `main` deploys automatically. After the `image`
+job, the `deploy` job in `ci.yml` connects over SSH as the VPS user `deploy`
+and sends only the tag `sha-<short>`. That user's key is restricted to one
+forced command, the script `rmx-deploy-probe` (source:
+[rmx-vps `services/probe/deploy/`](https://github.com/jRmx0/rmx-vps/tree/main/services/probe/deploy)).
+It checks the tag, pulls the image, restarts `probe-app`, waits for
+`/probe/health`, and rolls back to the previous tag if the new one isn't
+healthy (the job then fails). If the probe is switched off on the VPS, the
+tag is only recorded, not started.
+
+Repository secrets: `DEPLOY_HOST`, `DEPLOY_SSH_KEY` (the private key),
+`DEPLOY_KNOWN_HOSTS` (the VPS's ed25519 host-key line, pinned). Rotating the
+key is described in the rmx-vps README (§10, "Probe").
 
 ## License
 
