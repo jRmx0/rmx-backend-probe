@@ -8,7 +8,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Redirect},
-    routing::get,
+    routing::{any, get},
 };
 use probe_protocol::{ClientConfig, ConnectionType, Health, RecordInput, RecordRow};
 use tower_http::{
@@ -27,18 +27,22 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/ws", get(ws::upgrade))
         .route("/health", get(health))
-        .route("/config.json", get(client_config));
+        .route("/config.json", get(client_config))
+        // Unknown API paths are a plain 404, not the app's index.html.
+        .route("/api/{*rest}", any(|| async { StatusCode::NOT_FOUND }));
+
+    let mut app = Router::new().route("/probe", get(|| async { Redirect::permanent("/probe/") }));
 
     // The built client (production only). Unknown paths fall back to
     // index.html so client-side routes still load the app.
     if let Some(dir) = &state.config.static_dir {
         let index = ServeFile::new(dir.join("index.html"));
+        // `nest` does not match "/probe/" itself, so route it explicitly.
+        app = app.route_service("/probe/", index.clone());
         probe = probe.fallback_service(ServeDir::new(dir).fallback(index));
     }
 
-    Router::new()
-        .route("/probe", get(|| async { Redirect::permanent("/probe/") }))
-        .nest("/probe", probe)
+    app.nest("/probe", probe)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

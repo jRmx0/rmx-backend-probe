@@ -38,6 +38,10 @@ struct TestApp {
 
 impl TestApp {
     async fn start(pool: PgPool) -> Self {
+        Self::start_with(pool, None).await
+    }
+
+    async fn start_with(pool: PgPool, static_dir: Option<String>) -> Self {
         let _ = dotenvy::dotenv();
         let prefix = format!("probe/it-{:016x}", rand::random::<u64>());
         let config = {
@@ -46,7 +50,7 @@ impl TestApp {
                 "MQTT_TOPIC_PREFIX" => Some(prefix.clone()),
                 "MQTT_CLIENT_ID" => Some(format!("server-{}", prefix.replace('/', "-"))),
                 "MQTT_WS_URL" => Some("ws://example.test/mqtt".into()),
-                "STATIC_DIR" => None,
+                "STATIC_DIR" => static_dir.clone(),
                 _ => std::env::var(key).ok(),
             })
             .expect("test config (is .env present?)")
@@ -557,4 +561,37 @@ async fn mqtt_crud_and_live_events(pool: PgPool) {
     let status_topic = topics::server_status(&app.prefix);
     app.stop().await;
     assert_eq!(mqtt.next_on(&status_topic).await, b"offline");
+}
+
+#[sqlx::test]
+async fn serves_client_files_under_prefix(pool: PgPool) {
+    let dir = std::env::temp_dir().join(format!("probe-static-{:016x}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("index.html"), "<!doctype html>index").unwrap();
+    std::fs::write(dir.join("app.js"), "console.log(1)").unwrap();
+    let app = TestApp::start_with(pool, Some(dir.to_string_lossy().into_owned())).await;
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let get = |path: &str| http.get(format!("{}{path}", app.base)).send();
+
+    let res = get("/probe").await.unwrap();
+    assert_eq!(res.status(), 308);
+    assert_eq!(res.headers()["location"], "/probe/");
+
+    for path in ["/probe/", "/probe/some/client/route"] {
+        let res = get(path).await.unwrap();
+        assert_eq!(res.status(), 200, "{path}");
+        assert_eq!(res.text().await.unwrap(), "<!doctype html>index", "{path}");
+    }
+    assert_eq!(
+        get("/probe/app.js").await.unwrap().text().await.unwrap(),
+        "console.log(1)"
+    );
+    assert_eq!(get("/probe/api/nope").await.unwrap().status(), 404);
+    assert_eq!(get("/elsewhere").await.unwrap().status(), 404);
+
+    app.stop().await;
+    let _ = std::fs::remove_dir_all(dir);
 }
