@@ -10,9 +10,11 @@ export function CreateRecordForm() {
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
+    const submitted = value;
     try {
-      await createRecord(value === "" ? null : value);
-      setValue("");
+      await createRecord(submitted === "" ? null : submitted);
+      // Keep anything typed while the request was in flight.
+      setValue((current) => (current === submitted ? "" : current));
     } catch {
       // The status panel shows the error.
     } finally {
