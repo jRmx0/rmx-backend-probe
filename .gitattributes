@@ -1,0 +1,4 @@
+# LF everywhere: config files are mounted into Linux containers, and the
+# generated TypeScript types are compared byte for byte in CI.
+* text=auto eol=lf
+*.png binary
