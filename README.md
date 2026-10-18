@@ -211,15 +211,23 @@ topic prefix, so they run in parallel. They cover REST, WSS and MQTT CRUD,
 cross-transport live events, health, `config.json`, the `record_events` log,
 the retained server status and graceful shutdown.
 
-**After changing a SQL query**, refresh the offline data (needs the stack):
+**Compile-time query checks.** sqlx checks every `query!` macro while
+compiling. `.env.example` sets `SQLX_OFFLINE=true`, so local builds, Docker and
+CI all use the committed query data in `.sqlx/` and need no running database
+(a fresh database has no tables until the server's migrations run, so an online
+check would fail on a fresh clone anyway).
+
+**After adding or changing a SQL query** the build fails with "no cached data
+for this query". Refresh the data (needs the stack and a migrated database:
+run the server once, or `sqlx migrate run --source crates/probe-server/migrations`):
 
 ```powershell
 cargo install sqlx-cli --no-default-features --features postgres,rustls   # once
 cargo sqlx prepare --workspace -- --all-targets --all-features
 ```
 
-and commit `.sqlx/`. Docker and CI build with `SQLX_OFFLINE=true` and fail if
-it is stale.
+and commit `.sqlx/`. (`cargo sqlx prepare` checks against the live database
+itself, whatever `SQLX_OFFLINE` says.)
 
 ## CI/CD
 
