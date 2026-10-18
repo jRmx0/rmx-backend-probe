@@ -9,8 +9,9 @@ updates:
         patterns: ["*"]
         update-types: [minor, patch]
 
-  # Bun projects use the npm ecosystem; Dependabot reads package.json + bun.lock.
-  - package-ecosystem: npm
+  # Bun has its own ecosystem: "npm" (npm_and_yarn) refuses to touch bun.lock
+  # and fails with "Bun is misconfigured in this repository".
+  - package-ecosystem: bun
     directory: /client
     schedule:
       interval: weekly
