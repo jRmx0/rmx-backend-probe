@@ -1,0 +1,87 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, time, connection_type AS \"connection_type: ConnectionType\", value, updated_at\n               FROM records ORDER BY time DESC, id DESC LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "records",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "time",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "records",
+            "name": "time"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "connection_type: ConnectionType",
+        "type_info": {
+          "Custom": {
+            "name": "connection_type",
+            "kind": {
+              "Enum": [
+                "https",
+                "wss",
+                "mqtt"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "records",
+            "name": "connection_type"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "value",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "records",
+            "name": "value"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "records",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "be54524ddf200d6888e52e67399933d239d981e95af19bd3388fffaea9b1b326"
+}

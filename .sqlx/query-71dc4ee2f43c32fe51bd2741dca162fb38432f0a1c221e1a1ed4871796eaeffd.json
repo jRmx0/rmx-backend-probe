@@ -1,0 +1,99 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO records (connection_type, value) VALUES ($1, $2)\n               RETURNING id, time, connection_type AS \"connection_type: ConnectionType\", value, updated_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "records",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "time",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "records",
+            "name": "time"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "connection_type: ConnectionType",
+        "type_info": {
+          "Custom": {
+            "name": "connection_type",
+            "kind": {
+              "Enum": [
+                "https",
+                "wss",
+                "mqtt"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "records",
+            "name": "connection_type"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "value",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "records",
+            "name": "value"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "records",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "connection_type",
+            "kind": {
+              "Enum": [
+                "https",
+                "wss",
+                "mqtt"
+              ]
+            }
+          }
+        },
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "71dc4ee2f43c32fe51bd2741dca162fb38432f0a1c221e1a1ed4871796eaeffd"
+}
