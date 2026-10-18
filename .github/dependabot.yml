@@ -19,6 +19,13 @@ updates:
       client:
         patterns: ["*"]
         update-types: [minor, patch]
+    ignore:
+      # TypeScript 7 (typescript-go) breaks `bun run lint`: typescript-eslint
+      # supports only TS < 6.1 (checked 2026-10-18, v8.71.2). Remove this rule
+      # once https://github.com/typescript-eslint/typescript-eslint/issues/10940
+      # is resolved and a release supports TS 7.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
