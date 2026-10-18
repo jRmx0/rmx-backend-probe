@@ -120,21 +120,47 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ---------------------------------------------------------------------------
-  # PLACEHOLDER — disabled. Automatic deploy on merge to main is set up in a
-  # separate session together with the VPS side:
-  #   - a restricted SSH key whose authorized_keys entry forces one deploy
-  #     script (no shell),
-  #   - repository secrets DEPLOY_HOST, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS,
-  #   - the script pulls ghcr.io/jrmx0/rmx-backend-probe:sha-<short> and
-  #     restarts the `probe` Compose profile.
-  # Remove `if: false` once that exists.
-  # ---------------------------------------------------------------------------
+  # Deploy every push to main. The SSH key's authorized_keys entry on the VPS
+  # forces one script (/usr/local/sbin/rmx-deploy-probe, source in rmx-vps:
+  # services/probe/deploy/), so the only thing this job can send is the tag.
+  # The script pulls the image, restarts probe-app, waits for /probe/health
+  # and rolls back if it isn't healthy (then this job fails).
+  # Secrets: DEPLOY_HOST, DEPLOY_SSH_KEY (private key), DEPLOY_KNOWN_HOSTS
+  # (the VPS host key line, pinned, so no trust-on-first-use).
   deploy:
-    name: Deploy to VPS (placeholder)
-    if: false
+    name: Deploy to VPS
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [image]
     runs-on: ubuntu-24.04
     environment: production
+    # One deploy at a time, in order; never cancel one halfway.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     steps:
-      - run: echo "not configured yet"
+      - name: Deploy sha-<short> over SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          # Same tag as the image job's type=sha,format=short (7 characters).
+          TAG="sha-${GITHUB_SHA::7}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
+          # Retry only connection failures (exit 255): the VPS network
+          # sometimes drops new SSH connections. The script is idempotent.
+          for attempt in 1 2 3; do
+            rc=0
+            ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes \
+              -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+              "deploy@$DEPLOY_HOST" "$TAG" || rc=$?
+            [ "$rc" -ne 255 ] && break
+            echo "SSH connection failed (attempt $attempt), retrying in 20 s"
+            sleep 20
+          done
+          rm -f ~/.ssh/deploy_key
+          exit "$rc"
