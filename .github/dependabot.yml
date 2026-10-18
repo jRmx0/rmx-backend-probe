@@ -28,3 +28,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Bun is pinned in three places (this Dockerfile, bun-version in ci.yml,
+      # and the developer's PC), so it is bumped by hand, all at once.
+      - dependency-name: oven/bun

@@ -5,7 +5,7 @@
 # Bun is only a build tool here; the runtime image has no Bun, shell or package manager.
 
 # ---- 1. Client: bun build -> /client/dist ---------------------------------
-FROM oven/bun:1.3.11 AS client
+FROM oven/bun:1.4.3 AS client
 WORKDIR /client
 COPY client/package.json client/bun.lock ./
 RUN bun install --frozen-lockfile
