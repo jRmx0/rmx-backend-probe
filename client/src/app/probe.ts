@@ -8,7 +8,7 @@ import type { ConnectionType } from "@/generated/ConnectionType";
 import { wsUrl } from "@/lib/paths";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { useRecordsStore } from "@/stores/recordsStore";
-import { fetchClientConfig, fetchHealth, httpsTransport } from "@/transports/https";
+import { checkSession, fetchClientConfig, fetchHealth, httpsTransport } from "@/transports/https";
 import { MqttConnection, type MqttLogin } from "@/transports/mqtt";
 import { rpcTransport, type RecordsTransport } from "@/transports/types";
 import { WssConnection } from "@/transports/wss";
@@ -36,6 +36,10 @@ const wss = new WssConnection(wsUrl(), {
     conn().setWss(state, detail);
     // After a (re)connect, events may have been missed: list again.
     if (state === "open" && !eventsViaMqtt()) void reload();
+    // A browser doesn't tell scripts why a handshake failed (a 401 looks like
+    // any other failure), and the server closes the socket with 4001 when the
+    // session ends. Either way, ask the server whether we're still logged in.
+    if (state === "closed") void checkSession();
   },
   onEvent: (event) => onEvent("wss", event),
 });
@@ -126,7 +130,11 @@ async function checkHealth() {
   }
 }
 
-/** Starts the WebSocket and health polling. Returns a stop function. */
+/**
+ * Starts the WebSocket and health polling. Returns a stop function. Runs only
+ * while logged in: the app unmounts on logout, which stops everything
+ * (including MQTT, which has its own login).
+ */
 export function startProbe(): () => void {
   wss.start();
   void checkHealth();
@@ -138,5 +146,7 @@ export function startProbe(): () => void {
     clearInterval(timer);
     wss.stop();
     mqtt.disconnect();
+    // Don't leave data on screen (or in memory) for the next login.
+    useRecordsStore.getState().setAll([]);
   };
 }

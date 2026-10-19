@@ -2,6 +2,7 @@
 //! CRUD on `records` over HTTPS (REST), WSS and MQTT, with every change logged
 //! to a TimescaleDB hypertable and pushed live to all clients.
 
+pub mod auth;
 pub mod config;
 mod error;
 mod http;
@@ -10,6 +11,7 @@ mod records;
 mod ws;
 
 use std::{
+    net::SocketAddr,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -22,6 +24,7 @@ use sqlx::{PgPool, postgres::PgPoolOptions};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
+use auth::Auth;
 pub use config::Config;
 use records::Records;
 
@@ -31,6 +34,7 @@ pub struct AppState {
     config: Arc<Config>,
     pool: PgPool,
     records: Records,
+    auth: Auth,
     mqtt_connected: Arc<AtomicBool>,
     shutdown: CancellationToken,
 }
@@ -79,23 +83,61 @@ pub async fn serve(
         shutdown.clone(),
     );
 
+    let auth = Auth::new(pool.clone());
+    let cleanup = tokio::spawn(delete_expired_sessions(auth.clone(), shutdown.clone()));
+
     let state = AppState {
         config: Arc::new(config),
         pool: pool.clone(),
         records,
+        auth,
         mqtt_connected,
         shutdown: shutdown.clone(),
     };
 
     tracing::info!(addr = %listener.local_addr()?, "listening");
-    axum::serve(listener, http::router(state))
+    // With the TCP peer address, for login rate limiting without a proxy.
+    let app = http::router(state).into_make_service_with_connect_info::<SocketAddr>();
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown.cancelled_owned())
         .await
         .context("http server failed")?;
 
     // HTTP is drained; let MQTT say goodbye, then close the pool.
     let _ = mqtt.await;
+    let _ = cleanup.await;
     pool.close().await;
     tracing::info!("stopped");
     Ok(())
+}
+
+/// Connects to the database for the user commands (`create-user` etc.),
+/// running pending migrations so the tables exist.
+pub async fn connect_for_admin(database_url: &str) -> anyhow::Result<PgPool> {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(database_url)
+        .await
+        .context("cannot connect to the database")?;
+    sqlx::migrate!()
+        .run(&pool)
+        .await
+        .context("database migration failed")?;
+    Ok(pool)
+}
+
+/// Once an hour, deletes sessions that have timed out.
+async fn delete_expired_sessions(auth: Auth, shutdown: CancellationToken) {
+    let mut tick = tokio::time::interval(Duration::from_secs(60 * 60));
+    loop {
+        tokio::select! {
+            _ = tick.tick() => match auth.delete_expired().await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(sessions = n, "deleted expired sessions"),
+                Err(e) => tracing::warn!(error = %e, "deleting expired sessions failed"),
+            },
+            () = shutdown.cancelled() => break,
+        }
+    }
 }
