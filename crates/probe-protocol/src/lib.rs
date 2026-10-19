@@ -152,6 +152,12 @@ pub enum ErrorCode {
     BadRequest,
     NotFound,
     Internal,
+    /// No valid session (REST: 401), or wrong username or password at login.
+    Unauthorized,
+    /// The request came from a page on another origin (REST: 403).
+    Forbidden,
+    /// Too many failed logins; wait `Retry-After` seconds (REST: 429).
+    TooManyRequests,
 }
 
 /// Error body, used by REST (with a matching HTTP status) and in [`RpcResult::Error`].
@@ -218,6 +224,30 @@ pub struct ClientConfig {
     pub mqtt_ws_url: String,
     /// Topic prefix, normally `probe`.
     pub mqtt_topic_prefix: String,
+}
+
+/// Body of `POST /probe/api/auth/login`.
+#[derive(Clone, Deserialize, Serialize, TS)]
+#[ts(export)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+// Hand-written so the password never ends up in a log line.
+impl std::fmt::Debug for LoginRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginRequest")
+            .field("username", &self.username)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The logged-in user: the answer to a login and to `GET /probe/api/auth/me`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Me {
+    pub username: String,
 }
 
 /// MQTT topic layout. A client puts its own id in the topic, like mowers will
@@ -335,6 +365,23 @@ mod tests {
         assert!(RecordInput { value: Some(ok) }.validate().is_ok());
         let long = "a".repeat(MAX_VALUE_CHARS + 1);
         assert!(RecordInput { value: Some(long) }.validate().is_err());
+    }
+
+    #[test]
+    fn login_request_debug_hides_password() {
+        let req = LoginRequest {
+            username: "probe".into(),
+            password: "hunter2".into(),
+        };
+        let debug = format!("{req:?}");
+        assert!(
+            debug.contains("probe") && !debug.contains("hunter2"),
+            "{debug}"
+        );
+        assert_eq!(
+            serde_json::to_value(ErrorCode::TooManyRequests).unwrap(),
+            "too_many_requests"
+        );
     }
 
     #[test]

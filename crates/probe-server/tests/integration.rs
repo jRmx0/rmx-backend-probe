@@ -9,6 +9,9 @@
 //!
 //! `#[sqlx::test]` gives every test its own fresh, migrated database, and every
 //! test uses its own MQTT topic prefix, so tests can run in parallel.
+//! `TestApp::start` also creates a user and logs in, so `app.http` and
+//! `app.ws()` are a logged-in browser on an allowed origin; `app.anon` is
+//! a client without cookie or Origin.
 
 use std::time::Duration;
 
@@ -22,16 +25,30 @@ use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use serde_json::json;
 use sqlx::PgPool;
 use tokio::{net::TcpStream, sync::mpsc, time::timeout};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
+use tokio_tungstenite::{
+    MaybeTlsStream, WebSocketStream,
+    tungstenite::{self, Message, client::IntoClientRequest},
+};
 use tokio_util::sync::CancellationToken;
 
 const WAIT: Duration = Duration::from_secs(5);
+/// The page origin the tests pretend to be (in ALLOWED_ORIGINS).
+const ORIGIN: &str = "http://probe.test";
+const USER: &str = "tester";
+const PASSWORD: &str = "correct horse battery staple";
+const COOKIE: &str = "__Secure-probe_session";
 
 /// One running probe-server on a random local port.
 struct TestApp {
     base: String,
     prefix: String,
+    pool: PgPool,
+    /// Logged in as USER, sends Origin: ORIGIN.
     http: reqwest::Client,
+    /// The `name=value` session cookie of `http`.
+    cookie: String,
+    /// No cookie, no Origin.
+    anon: reqwest::Client,
     shutdown: CancellationToken,
     task: tokio::task::JoinHandle<anyhow::Result<()>>,
 }
@@ -51,6 +68,7 @@ impl TestApp {
                 "MQTT_CLIENT_ID" => Some(format!("server-{}", prefix.replace('/', "-"))),
                 "MQTT_WS_URL" => Some("ws://example.test/mqtt".into()),
                 "STATIC_DIR" => static_dir.clone(),
+                "ALLOWED_ORIGINS" => Some(format!("{ORIGIN},http://other.allowed.test")),
                 _ => std::env::var(key).ok(),
             })
             .expect("test config (is .env present?)")
@@ -60,20 +78,59 @@ impl TestApp {
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(probe_server::serve(
             config,
-            pool,
+            pool.clone(),
             listener,
             shutdown.clone(),
         ));
 
-        let app = Self {
+        let mut app = Self {
             base,
             prefix,
+            pool,
             http: reqwest::Client::new(),
+            cookie: String::new(),
+            anon: reqwest::Client::new(),
             shutdown,
             task,
         };
         app.wait_healthy().await;
+        probe_server::auth::create_user(&app.pool, USER, PASSWORD)
+            .await
+            .unwrap();
+        let res = app.login(USER, PASSWORD).await;
+        assert_eq!(res.status(), 200);
+        app.cookie = session_cookie(&res);
+        app.http = client(Some(&app.cookie), Some(ORIGIN));
         app
+    }
+
+    /// `POST /probe/api/auth/login` from an allowed origin, without a cookie.
+    async fn login(&self, username: &str, password: &str) -> reqwest::Response {
+        self.anon
+            .post(self.url("/api/auth/login"))
+            .header("origin", ORIGIN)
+            .json(&json!({ "username": username, "password": password }))
+            .send()
+            .await
+            .unwrap()
+    }
+
+    /// Opens the WebSocket with the given cookie and Origin headers.
+    async fn ws_with(
+        &self,
+        cookie: Option<&str>,
+        origin: Option<&str>,
+    ) -> Result<Ws, tungstenite::Error> {
+        let url = format!("{}/ws", self.url("").replacen("http", "ws", 1));
+        let mut req = url.into_client_request().unwrap();
+        if let Some(c) = cookie {
+            req.headers_mut().insert("cookie", c.parse().unwrap());
+        }
+        if let Some(o) = origin {
+            req.headers_mut().insert("origin", o.parse().unwrap());
+        }
+        let (stream, _) = tokio_tungstenite::connect_async(req).await?;
+        Ok(Ws(stream))
     }
 
     fn url(&self, path: &str) -> String {
@@ -97,10 +154,11 @@ impl TestApp {
         }
     }
 
+    /// A logged-in WebSocket from an allowed origin.
     async fn ws(&self) -> Ws {
-        let url = format!("{}/ws", self.url("").replacen("http", "ws", 1));
-        let (stream, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-        Ws(stream)
+        self.ws_with(Some(&self.cookie), Some(ORIGIN))
+            .await
+            .unwrap()
     }
 
     async fn stop(self) {
@@ -110,6 +168,44 @@ impl TestApp {
             .expect("graceful shutdown in time")
             .unwrap()
             .unwrap();
+    }
+}
+
+/// A reqwest client that sends these headers on every request.
+fn client(cookie: Option<&str>, origin: Option<&str>) -> reqwest::Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Some(c) = cookie {
+        headers.insert("cookie", c.parse().unwrap());
+    }
+    if let Some(o) = origin {
+        headers.insert("origin", o.parse().unwrap());
+    }
+    reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .unwrap()
+}
+
+/// The `name=value` part of the session `Set-Cookie` header.
+fn session_cookie(res: &reqwest::Response) -> String {
+    let set = set_cookie(res).expect("a Set-Cookie header");
+    let pair = set.split(';').next().unwrap().to_string();
+    assert!(pair.starts_with(&format!("{COOKIE}=")), "{set}");
+    pair
+}
+
+fn set_cookie(res: &reqwest::Response) -> Option<String> {
+    res.headers()
+        .get("set-cookie")
+        .map(|v| v.to_str().unwrap().to_string())
+}
+
+/// The HTTP status a refused WebSocket handshake got.
+fn ws_refused(result: Result<Ws, tungstenite::Error>) -> u16 {
+    match result {
+        Err(tungstenite::Error::Http(res)) => res.status().as_u16(),
+        Err(e) => panic!("expected an HTTP refusal, got {e}"),
+        Ok(_) => panic!("the WebSocket was accepted"),
     }
 }
 
@@ -293,7 +389,9 @@ async fn rest_crud_health_and_config(pool: PgPool) {
     let app = TestApp::start(pool.clone()).await;
     let http = &app.http;
 
-    let health: Health = http
+    // Health is public: no cookie needed.
+    let health: Health = app
+        .anon
         .get(app.url("/health"))
         .send()
         .await
@@ -594,4 +692,365 @@ async fn serves_client_files_under_prefix(pool: PgPool) {
 
     app.stop().await;
     let _ = std::fs::remove_dir_all(dir);
+}
+
+// ---- Login and sessions -------------------------------------------------------
+
+#[sqlx::test]
+async fn login_me_and_logout(pool: PgPool) {
+    let app = TestApp::start(pool.clone()).await;
+
+    // The login set a cookie with all the protective attributes.
+    let res = app.login("Tester", PASSWORD).await; // usernames ignore case
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["cache-control"], "no-store");
+    let set = set_cookie(&res).unwrap();
+    for attr in [
+        "Path=/probe",
+        "HttpOnly",
+        "Secure",
+        "SameSite=Strict",
+        "Max-Age=2592000",
+    ] {
+        assert!(set.contains(attr), "{set} lacks {attr}");
+    }
+    let me: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(me, json!({ "username": "tester" }));
+
+    // The database has only the SHA-256 of the token, never the token.
+    let token = app.cookie.split_once('=').unwrap().1;
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sessions WHERE id_hash = sha256(convert_to($1, 'UTF8'))",
+    )
+    .bind(token)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored, 1);
+
+    let res = app.http.get(app.url("/api/auth/me")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["cache-control"], "no-store");
+
+    // Logout deletes the session; the same cookie is worthless afterwards.
+    let res = app
+        .http
+        .post(app.url("/api/auth/logout"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    assert!(set_cookie(&res).unwrap().contains("Max-Age=0"));
+    let res = app.http.get(app.url("/api/auth/me")).send().await.unwrap();
+    assert_eq!(res.status(), 401);
+    // ...and the browser is told to drop it.
+    assert!(set_cookie(&res).unwrap().contains("Max-Age=0"));
+    assert_eq!(
+        app.http
+            .get(app.url("/api/records"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    assert_eq!(
+        ws_refused(app.ws_with(Some(&app.cookie), Some(ORIGIN)).await),
+        401
+    );
+
+    // Logging out again is harmless.
+    let res = app
+        .http
+        .post(app.url("/api/auth/logout"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    app.stop().await;
+}
+
+#[sqlx::test]
+async fn wrong_password_and_unknown_user(pool: PgPool) {
+    let app = TestApp::start(pool.clone()).await;
+    for (user, password) in [
+        (USER, "wrong password!"),
+        ("nobody", PASSWORD),
+        ("not a valid name", PASSWORD),
+        (USER, ""),
+    ] {
+        let res = app.login(user, password).await;
+        assert_eq!(res.status(), 401, "{user}");
+        assert!(set_cookie(&res).is_none());
+        let body: serde_json::Value = res.json().await.unwrap();
+        // The same answer whether the user exists or not.
+        assert_eq!(
+            body,
+            json!({ "code": "unauthorized", "message": "wrong username or password" })
+        );
+    }
+    app.stop().await;
+}
+
+#[sqlx::test]
+async fn protected_routes_need_a_session(pool: PgPool) {
+    let app = TestApp::start(pool.clone()).await;
+    let forged = format!("{COOKIE}={}", "ab".repeat(32));
+    let malformed = format!("{COOKIE}=nope");
+    let twice = format!("{0}; {0}", app.cookie);
+
+    for cookie in [None, Some(forged.as_str()), Some(&malformed), Some(&twice)] {
+        let c = client(cookie, Some(ORIGIN));
+        for path in ["/api/records", "/api/auth/me", "/config.json"] {
+            let res = c.get(app.url(path)).send().await.unwrap();
+            assert_eq!(res.status(), 401, "{path} with {cookie:?}");
+            let body: serde_json::Value = res.json().await.unwrap();
+            assert_eq!(body["code"], "unauthorized");
+        }
+        let res = c
+            .post(app.url("/api/records"))
+            .json(&json!({ "value": "x" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 401);
+        let res = c
+            .post(app.url("/api/auth/logout-all"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 401);
+        assert_eq!(ws_refused(app.ws_with(cookie, Some(ORIGIN)).await), 401);
+    }
+    // Nothing was created by the refused requests.
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM records")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+
+    // Health is public.
+    let res = app.anon.get(app.url("/health")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    app.stop().await;
+}
+
+#[sqlx::test]
+async fn expired_and_idle_sessions_are_rejected(pool: PgPool) {
+    let app = TestApp::start(pool.clone()).await;
+    let me = |cookie: &str| {
+        let c = client(Some(cookie), None);
+        let url = app.url("/api/auth/me");
+        async move { c.get(url).send().await.unwrap().status() }
+    };
+
+    // Absolute timeout.
+    let a = session_cookie(&app.login(USER, PASSWORD).await);
+    assert_eq!(me(&a).await, 200);
+    sqlx::query("UPDATE sessions SET expires_at = now() - interval '1 second'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(me(&a).await, 401);
+    assert_eq!(me(&app.cookie).await, 401);
+
+    // Idle timeout (7 days without a request), though not expired yet.
+    let b = session_cookie(&app.login(USER, PASSWORD).await);
+    sqlx::query(
+        "UPDATE sessions SET last_seen_at = now() - interval '7 days 1 minute'
+         WHERE expires_at > now()",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(me(&b).await, 401);
+
+    // Sliding: a request moves last_seen_at forward (at most once a minute).
+    let c = session_cookie(&app.login(USER, PASSWORD).await);
+    sqlx::query(
+        "UPDATE sessions SET last_seen_at = now() - interval '6 days'
+         WHERE expires_at > now() AND last_seen_at > now() - interval '1 hour'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(me(&c).await, 200);
+    let touched: bool = sqlx::query_scalar(
+        "SELECT last_seen_at > now() - interval '1 minute' FROM sessions
+         WHERE id_hash = sha256(convert_to($1, 'UTF8'))",
+    )
+    .bind(c.split_once('=').unwrap().1)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(touched);
+    app.stop().await;
+}
+
+#[sqlx::test]
+async fn foreign_origins_are_rejected(pool: PgPool) {
+    let app = TestApp::start(pool.clone()).await;
+
+    for origin in [
+        Some("https://evil.example"),
+        Some("http://probe.test.evil.example"),
+        Some("null"),
+        None,
+    ] {
+        // Logged in, but the request comes from another site's page (CSRF).
+        let c = client(Some(&app.cookie), origin);
+        let res = c
+            .post(app.url("/api/records"))
+            .json(&json!({ "value": "csrf" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 403, "{origin:?}");
+        assert_eq!(
+            res.json::<serde_json::Value>().await.unwrap()["code"],
+            "forbidden"
+        );
+        let res = c.delete(app.url("/api/records/1")).send().await.unwrap();
+        assert_eq!(res.status(), 403);
+        // Login CSRF (logging the victim into the attacker's account) too.
+        let res = client(None, origin)
+            .post(app.url("/api/auth/login"))
+            .json(&json!({ "username": USER, "password": PASSWORD }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 403);
+        // Cross-site WebSocket hijacking.
+        assert_eq!(
+            ws_refused(app.ws_with(Some(&app.cookie), origin).await),
+            403
+        );
+    }
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM records")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+
+    // Reading needs no Origin (browsers don't always send it on GET), and
+    // every origin in ALLOWED_ORIGINS works.
+    let res = client(Some(&app.cookie), None)
+        .get(app.url("/api/records"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let res = client(Some(&app.cookie), Some("http://other.allowed.test"))
+        .post(app.url("/api/records"))
+        .json(&json!({ "value": "ok" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 201);
+    let mut ws = app.ws().await;
+    ws.send("l1", Request::List).await;
+    assert!(matches!(ws.response("l1").await, RpcResult::Ok { .. }));
+    app.stop().await;
+}
+
+#[sqlx::test]
+async fn failed_logins_are_rate_limited(pool: PgPool) {
+    let app = TestApp::start(pool.clone()).await;
+    // Five free failures, then the sixth makes the username wait 1 s.
+    for _ in 0..6 {
+        assert_eq!(app.login(USER, "wrong password!").await.status(), 401);
+    }
+    // While waiting, even the right password gets 429 (it isn't checked).
+    let res = app.login(USER, PASSWORD).await;
+    assert_eq!(res.status(), 429);
+    assert_eq!(res.headers()["retry-after"], "1");
+    assert_eq!(
+        res.json::<serde_json::Value>().await.unwrap()["code"],
+        "too_many_requests"
+    );
+    // Upper case doesn't get around it.
+    assert_eq!(app.login("TESTER", PASSWORD).await.status(), 429);
+
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert_eq!(app.login(USER, PASSWORD).await.status(), 200);
+    // A success resets the count: five free failures again.
+    for _ in 0..5 {
+        assert_eq!(app.login(USER, "wrong password!").await.status(), 401);
+    }
+    assert_eq!(app.login(USER, PASSWORD).await.status(), 200);
+    app.stop().await;
+}
+
+#[sqlx::test]
+async fn logout_everywhere_and_password_change(pool: PgPool) {
+    let app = TestApp::start(pool.clone()).await;
+    let phone = session_cookie(&app.login(USER, PASSWORD).await);
+    let me = |cookie: &str| {
+        let c = client(Some(cookie), Some(ORIGIN));
+        let url = app.url("/api/auth/me");
+        async move { c.get(url).send().await.unwrap().status() }
+    };
+    assert_eq!(me(&phone).await, 200);
+
+    // "Log out everywhere" from the PC ends the phone's session too.
+    let res = app
+        .http
+        .post(app.url("/api/auth/logout-all"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+    assert_eq!(me(&app.cookie).await, 401);
+    assert_eq!(me(&phone).await, 401);
+
+    // A new password (the set-password command) ends all sessions as well,
+    // and only the new password works afterwards.
+    let pc = session_cookie(&app.login(USER, PASSWORD).await);
+    probe_server::auth::set_password(&pool, USER, "a brand new password")
+        .await
+        .unwrap();
+    assert_eq!(me(&pc).await, 401);
+    assert_eq!(app.login(USER, PASSWORD).await.status(), 401);
+    assert_eq!(app.login(USER, "a brand new password").await.status(), 200);
+
+    // A login replaces the session sent along with it (no session fixation).
+    let first = session_cookie(&app.login(USER, "a brand new password").await);
+    let res = client(Some(&first), Some(ORIGIN))
+        .post(app.url("/api/auth/login"))
+        .json(&json!({ "username": USER, "password": "a brand new password" }))
+        .send()
+        .await
+        .unwrap();
+    let second = session_cookie(&res);
+    assert_ne!(first, second);
+    assert_eq!(me(&first).await, 401);
+    assert_eq!(me(&second).await, 200);
+    app.stop().await;
+}
+
+#[sqlx::test]
+async fn user_commands(pool: PgPool) {
+    use probe_server::auth::{create_user, delete_user, set_password};
+    create_user(&pool, "Alice", "twelve chars").await.unwrap();
+    let (name, hash): (String, String) =
+        sqlx::query_as("SELECT username, password_hash FROM users")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(name, "alice");
+    assert!(hash.starts_with("$argon2id$"), "{hash}");
+
+    let err = create_user(&pool, "alice", "twelve chars")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("already exists"), "{err}");
+    assert!(create_user(&pool, "bob", "short").await.is_err());
+    assert!(
+        create_user(&pool, "bad name", "twelve chars")
+            .await
+            .is_err()
+    );
+    assert!(set_password(&pool, "nobody", "twelve chars").await.is_err());
+    delete_user(&pool, "ALICE").await.unwrap();
+    assert!(delete_user(&pool, "alice").await.is_err());
 }

@@ -7,6 +7,7 @@
 use std::time::Duration;
 
 use axum::{
+    Extension,
     extract::{
         State, WebSocketUpgrade,
         ws::{CloseFrame, Message, Utf8Bytes, WebSocket, close_code},
@@ -20,22 +21,32 @@ use probe_protocol::{
 };
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::AppState;
+use crate::{AppState, auth::CurrentUser};
 
 /// Keeps idle connections alive through proxies and detects dead peers.
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 
-pub async fn upgrade(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
+/// Close code sent when the session behind the socket has ended (logout,
+/// timeout, password change). The client then shows the login form.
+pub const SESSION_ENDED: u16 = 4001;
+
+/// Only reached with a valid session: `require_session` runs before this,
+/// and the Origin check before that.
+pub async fn upgrade(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    ws: WebSocketUpgrade,
+) -> Response {
     ws.max_message_size(64 * 1024)
-        .on_upgrade(move |socket| handle(socket, state))
+        .on_upgrade(move |socket| handle(socket, state, user))
 }
 
-async fn handle(socket: WebSocket, state: AppState) {
+async fn handle(socket: WebSocket, state: AppState, user: CurrentUser) {
     let (mut tx, mut rx) = socket.split();
     let mut events = state.records.subscribe();
     let mut ping = tokio::time::interval(PING_INTERVAL);
     ping.reset();
-    tracing::debug!("websocket connected");
+    tracing::debug!(username = %user.username, "websocket connected");
 
     loop {
         let outgoing = tokio::select! {
@@ -62,6 +73,13 @@ async fn handle(socket: WebSocket, state: AppState) {
                 Err(RecvError::Closed) => break,
             },
             _ = ping.tick() => {
+                // A socket stays open for hours, so the session is checked
+                // again with every ping: logging out (anywhere) or a timeout
+                // closes it within PING_INTERVAL.
+                if !matches!(state.auth.validate(&user.session_hash, false).await, Ok(Some(_))) {
+                    let _ = tx.send(close(SESSION_ENDED, "session ended")).await;
+                    break;
+                }
                 if tx.send(Message::Ping(Default::default())).await.is_err() {
                     break;
                 }

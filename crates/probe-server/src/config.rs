@@ -18,6 +18,10 @@ pub struct Config {
     /// `MQTT_WS_URL`: the broker's WebSocket URL as the *browser* sees it.
     /// Served in `/probe/config.json`. Empty if unset.
     pub mqtt_ws_url: String,
+    /// `ALLOWED_ORIGINS`, required: comma-separated origins (`scheme://host[:port]`)
+    /// whose pages may log in, change data and open the WebSocket. On the VPS
+    /// `https://api.rmx.lt`. Everything else gets 403 (CSRF protection).
+    pub allowed_origins: Vec<String>,
     /// `STATIC_DIR`: built client files to serve under `/probe/`. Unset in local
     /// development, where the Bun dev server serves the client instead.
     pub static_dir: Option<PathBuf>,
@@ -74,9 +78,30 @@ impl Config {
                 topic_prefix,
             },
             mqtt_ws_url: get("MQTT_WS_URL").unwrap_or_default(),
+            allowed_origins: parse_origins(&required("ALLOWED_ORIGINS")?)?,
             static_dir: get("STATIC_DIR").map(PathBuf::from),
         })
     }
+}
+
+/// Origins as browsers send them: lower-case `scheme://host[:port]`, nothing after.
+fn parse_origins(value: &str) -> anyhow::Result<Vec<String>> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|o| !o.is_empty())
+        .map(|o| {
+            let lower = o.to_ascii_lowercase();
+            let rest = lower
+                .strip_prefix("https://")
+                .or_else(|| lower.strip_prefix("http://"))
+                .with_context(|| format!("ALLOWED_ORIGINS: {o} must start with https:// or http://"))?;
+            if rest.is_empty() || rest.contains(['/', '?', '#', '@', '*']) {
+                bail!("ALLOWED_ORIGINS: {o} must be only scheme://host[:port], like https://api.rmx.lt");
+            }
+            Ok(lower)
+        })
+        .collect()
 }
 
 fn parse_or<T: std::str::FromStr>(
@@ -103,6 +128,7 @@ mod tests {
             ("MQTT_HOST", "mosquitto"),
             ("MQTT_USERNAME", "probe-app"),
             ("MQTT_PASSWORD", "secret"),
+            ("ALLOWED_ORIGINS", "https://api.rmx.lt"),
         ])
     }
 
@@ -120,6 +146,33 @@ mod tests {
         assert_eq!(c.db_max_connections, 5);
         assert!(c.static_dir.is_none());
         assert_eq!(c.mqtt_ws_url, "");
+        assert_eq!(c.allowed_origins, ["https://api.rmx.lt"]);
+    }
+
+    #[test]
+    fn allowed_origins() {
+        let mut vars = base();
+        vars.insert(
+            "ALLOWED_ORIGINS",
+            " HTTP://localhost:3000 , https://a.example,",
+        );
+        assert_eq!(
+            load(&vars).unwrap().allowed_origins,
+            ["http://localhost:3000", "https://a.example"]
+        );
+        for bad in [
+            "api.rmx.lt",
+            "https://api.rmx.lt/",
+            "https://*.rmx.lt",
+            "ftp://x",
+            "https://",
+        ] {
+            vars.insert("ALLOWED_ORIGINS", bad);
+            assert!(load(&vars).is_err(), "{bad}");
+        }
+        // Required: no default that would let every origin in.
+        vars.remove("ALLOWED_ORIGINS");
+        assert!(load(&vars).is_err());
     }
 
     #[test]

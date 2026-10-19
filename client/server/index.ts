@@ -34,8 +34,31 @@ async function proxy(req: Request): Promise<Response> {
   }
 }
 
-/** Per-browser-socket state: the matching socket to probe-server. */
-type WsData = { upstream?: WebSocket; queue: (string | Uint8Array<ArrayBuffer>)[] };
+/**
+ * Per-browser-socket state: the matching socket to probe-server, and the
+ * headers probe-server checks on the handshake (session cookie, Origin).
+ */
+type WsData = {
+  upstream?: WebSocket;
+  queue: (string | Uint8Array<ArrayBuffer>)[];
+  headers: Record<string, string>;
+};
+
+/**
+ * Bun's WebSocket client, which (unlike a browser's) takes handshake headers.
+ * With the DOM lib loaded, TypeScript only knows the browser's constructor.
+ */
+const BunWebSocket = WebSocket as unknown as new (url: string, options: Bun.WebSocketOptions) => WebSocket;
+
+/** The handshake headers passed on to probe-server. */
+function forwardedHeaders(req: Request): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const name of ["cookie", "origin", "user-agent"]) {
+    const value = req.headers.get(name);
+    if (value !== null) headers[name] = value;
+  }
+  return headers;
+}
 
 /** Close codes that may not be sent in a close frame are replaced. */
 function sendableCode(code: number): number {
@@ -53,7 +76,7 @@ const server = serve<WsData>({
     "/probe/health": proxy,
     "/probe/config.json": proxy,
     "/probe/ws": (req: Request, server: Server<WsData>) => {
-      if (server.upgrade(req, { data: { queue: [] } })) return undefined;
+      if (server.upgrade(req, { data: { queue: [], headers: forwardedHeaders(req) } })) return undefined;
       return new Response("WebSocket upgrade expected", { status: 400 });
     },
     // The app itself, for every other path under /probe/.
@@ -63,7 +86,7 @@ const server = serve<WsData>({
   // Relays WebSocket frames both ways between the browser and probe-server.
   websocket: {
     open(ws: ServerWebSocket<WsData>) {
-      const upstream = new WebSocket(`${BACKEND_WS}/probe/ws`);
+      const upstream = new BunWebSocket(`${BACKEND_WS}/probe/ws`, { headers: ws.data.headers });
       ws.data.upstream = upstream;
       upstream.onopen = () => {
         for (const msg of ws.data.queue) upstream.send(msg);

@@ -7,8 +7,9 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
+    middleware,
     response::{IntoResponse, Redirect},
-    routing::{any, get},
+    routing::{any, get, post, put},
 };
 use probe_protocol::{ClientConfig, ConnectionType, Health, RecordInput, RecordRow};
 use tower_http::{
@@ -16,20 +17,39 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{AppState, error::AppError, ws};
+use crate::{AppState, auth, error::AppError, ws};
 
 pub fn router(state: AppState) -> Router {
-    let mut probe = Router::new()
+    // Fail closed: data and live connections are in `protected`, and every
+    // route there needs a valid session. Only the routes in `public` work
+    // without one: health (status only, for the deploy script and
+    // monitoring), login/logout, and the client's static files (the same code
+    // as in the public repository, no data).
+    let protected = Router::new()
         .route("/api/records", get(list).post(create))
+        .route("/api/records/{id}", put(update).delete(delete))
+        .route("/api/auth/me", get(auth::routes::me))
         .route(
-            "/api/records/{id}",
-            axum::routing::put(update).delete(delete),
+            "/api/auth/logout-all",
+            post(auth::routes::logout_everywhere),
         )
+        // The handshake is a normal GET with the cookie, checked here before
+        // the upgrade. That's what fixes iPhones: WebKit sends cookies on
+        // WebSocket handshakes (but not basic-auth credentials).
         .route("/ws", get(ws::upgrade))
-        .route("/health", get(health))
         .route("/config.json", get(client_config))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::routes::require_session,
+        ));
+
+    let mut probe = Router::new()
+        .route("/health", get(health))
+        .route("/api/auth/login", post(auth::routes::login))
+        .route("/api/auth/logout", post(auth::routes::logout))
         // Unknown API paths are a plain 404, not the app's index.html.
-        .route("/api/{*rest}", any(|| async { StatusCode::NOT_FOUND }));
+        .route("/api/{*rest}", any(|| async { StatusCode::NOT_FOUND }))
+        .merge(protected);
 
     let mut app = Router::new().route("/probe", get(|| async { Redirect::permanent("/probe/") }));
 
@@ -43,6 +63,11 @@ pub fn router(state: AppState) -> Router {
     }
 
     app.nest("/probe", probe)
+        // CSRF: state-changing requests and WebSocket handshakes only from our own pages.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::routes::check_origin,
+        ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
