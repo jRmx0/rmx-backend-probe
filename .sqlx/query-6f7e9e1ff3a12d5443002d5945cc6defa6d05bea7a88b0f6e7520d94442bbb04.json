@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, time, connection_type AS \"connection_type: ConnectionType\", value, updated_at\n               FROM records ORDER BY time DESC, id DESC LIMIT $1",
+  "query": "UPDATE records SET value = $2, connection_type = $3, updated_at = now()\n               WHERE id = $1\n               RETURNING id, time, connection_type AS \"connection_type: ConnectionType\", value, updated_at,\n                      host(created_ip) AS created_ip",
   "describe": {
     "columns": [
       {
@@ -68,11 +68,30 @@
             "name": "updated_at"
           }
         }
+      },
+      {
+        "ordinal": 5,
+        "name": "created_ip",
+        "type_info": "Text",
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
-        "Int8"
+        "Int8",
+        "Text",
+        {
+          "Custom": {
+            "name": "connection_type",
+            "kind": {
+              "Enum": [
+                "https",
+                "wss",
+                "mqtt"
+              ]
+            }
+          }
+        }
       ]
     },
     "nullable": [
@@ -80,8 +99,9 @@
       false,
       false,
       true,
-      false
+      false,
+      null
     ]
   },
-  "hash": "be54524ddf200d6888e52e67399933d239d981e95af19bd3388fffaea9b1b326"
+  "hash": "6f7e9e1ff3a12d5443002d5945cc6defa6d05bea7a88b0f6e7520d94442bbb04"
 }

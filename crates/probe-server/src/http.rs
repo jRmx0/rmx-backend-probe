@@ -17,7 +17,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{AppState, auth, error::AppError, ws};
+use crate::{AppState, auth, client_ip::ClientIp, error::AppError, records::Source, ws};
 
 pub fn router(state: AppState) -> Router {
     // Fail closed: data and live connections are in `protected`, and every
@@ -78,31 +78,33 @@ async fn list(State(state): State<AppState>) -> Result<Json<Vec<RecordRow>>, App
 
 async fn create(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Json(input): Json<RecordInput>,
 ) -> Result<(StatusCode, Json<RecordRow>), AppError> {
-    let record = state.records.create(ConnectionType::Https, input).await?;
+    let record = state.records.create(https(ip), input).await?;
     Ok((StatusCode::CREATED, Json(record)))
 }
 
 async fn update(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Path(id): Path<i64>,
     Json(input): Json<RecordInput>,
 ) -> Result<Json<RecordRow>, AppError> {
-    Ok(Json(
-        state
-            .records
-            .update(ConnectionType::Https, id, input)
-            .await?,
-    ))
+    Ok(Json(state.records.update(https(ip), id, input).await?))
 }
 
 async fn delete(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
-    state.records.delete(ConnectionType::Https, id).await?;
+    state.records.delete(https(ip), id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+fn https(ip: std::net::IpAddr) -> Source {
+    Source::new(ConnectionType::Https, Some(ip))
 }
 
 /// 200 when the database answers and the MQTT connection is up, else 503.

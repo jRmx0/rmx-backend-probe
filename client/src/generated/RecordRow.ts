@@ -8,4 +8,10 @@ export type RecordRow = { id: number,
 /**
  * When the record was created.
  */
-time: string, connection_type: ConnectionType, value: string | null, updated_at: string, };
+time: string, connection_type: ConnectionType, value: string | null, updated_at: string, 
+/**
+ * The client IP that created the record (an update keeps it). `None`
+ * for records created over MQTT: the broker doesn't pass on the
+ * client's address, so the server can't know it.
+ */
+created_ip: string | null, };

@@ -55,14 +55,25 @@ Migrations: `crates/probe-server/migrations/` (sqlx, run at server start).
 
 | Table | Kind | Columns |
 |---|---|---|
-| `records` | plain table (rows change in place) | `id`, `time` (created), `connection_type` (`https`/`wss`/`mqtt`, who created or last changed it), `value` (nullable), `updated_at` |
-| `record_events` | hypertable, 1-day chunks | `time`, `connection_type`, `op` (`create`/`update`/`delete`), `record_id`, `value` |
+| `records` | plain table (rows change in place) | `id`, `time` (created), `connection_type` (`https`/`wss`/`mqtt`, who created or last changed it), `value` (nullable), `updated_at`, `created_ip` (`inet`, who created it) |
+| `record_events` | hypertable, 1-day chunks | `time`, `connection_type`, `op` (`create`/`update`/`delete`), `record_id`, `value`, `ip` (`inet`, who made this change) |
 | `users` | plain table | `id`, `username` (lower case, unique), `password_hash` (Argon2id PHC string), `created_at`, `password_changed_at` |
 | `sessions` | plain table | `id_hash` (SHA-256 of the cookie token), `user_id` (→ users, cascade), `created_at`, `last_seen_at`, `expires_at`, `user_agent` |
 
 `record_events` is compressed after 1 day and dropped after 7 days
 (TimescaleDB background jobs). It has no foreign key, so deleted records keep
 their history.
+
+**Client IPs.** Every change stores the client's IP: `records.created_ip` for
+whoever created the row (an update keeps it; the UI shows it as "Created by
+IP"), and `record_events.ip` for each create, update and delete. Over
+HTTPS it's the request's IP, over WSS the IP of the WebSocket handshake.
+Behind Caddy that is the last `X-Forwarded-For` entry, the address Caddy saw;
+locally it's the TCP peer. Over MQTT it is `NULL` ("unknown" in the UI): the
+request reaches the server through the broker, which doesn't pass on the
+client's address. IP addresses are personal data. Only logged-in users see
+them, and the event log drops them with its chunks after 7 days, but
+`records` keeps `created_ip` as long as the row exists.
 
 ### Wire protocol
 

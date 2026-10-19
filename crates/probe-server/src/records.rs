@@ -5,6 +5,8 @@
 use probe_protocol::{
     ChangeEvent, ConnectionType, RecordInput, RecordOp, RecordRow, Request, RpcData, RpcResult,
 };
+use std::net::IpAddr;
+
 use sqlx::{PgPool, Postgres, Transaction};
 use tokio::sync::broadcast;
 
@@ -13,6 +15,25 @@ use crate::error::AppError;
 /// The list returns at most this many rows (newest first), so one response
 /// always fits comfortably in an MQTT message.
 pub const LIST_LIMIT: i64 = 500;
+
+/// Who makes a change: the transport and, if known, the client's IP.
+#[derive(Clone, Copy, Debug)]
+pub struct Source {
+    pub via: ConnectionType,
+    /// `None` over MQTT (the broker doesn't tell us the client's address).
+    pub ip: Option<IpAddr>,
+}
+
+impl Source {
+    pub fn new(via: ConnectionType, ip: Option<IpAddr>) -> Self {
+        Self { via, ip }
+    }
+
+    /// As text for SQL (`$n::text::inet`), so sqlx needs no extra IP type.
+    fn ip_text(&self) -> Option<String> {
+        self.ip.map(|ip| ip.to_string())
+    }
+}
 
 #[derive(Clone)]
 pub struct Records {
@@ -35,7 +56,8 @@ impl Records {
     pub async fn list(&self) -> Result<Vec<RecordRow>, AppError> {
         let rows = sqlx::query_as!(
             RecordRow,
-            r#"SELECT id, time, connection_type AS "connection_type: ConnectionType", value, updated_at
+            r#"SELECT id, time, connection_type AS "connection_type: ConnectionType", value, updated_at,
+                      host(created_ip) AS created_ip
                FROM records ORDER BY time DESC, id DESC LIMIT $1"#,
             LIST_LIMIT
         )
@@ -44,25 +66,23 @@ impl Records {
         Ok(rows)
     }
 
-    pub async fn create(
-        &self,
-        via: ConnectionType,
-        input: RecordInput,
-    ) -> Result<RecordRow, AppError> {
+    pub async fn create(&self, source: Source, input: RecordInput) -> Result<RecordRow, AppError> {
         input.validate().map_err(AppError::BadRequest)?;
         let mut tx = self.pool.begin().await?;
         let record = sqlx::query_as!(
             RecordRow,
-            r#"INSERT INTO records (connection_type, value) VALUES ($1, $2)
-               RETURNING id, time, connection_type AS "connection_type: ConnectionType", value, updated_at"#,
-            via as ConnectionType,
-            input.value
+            r#"INSERT INTO records (connection_type, value, created_ip) VALUES ($1, $2, $3::text::inet)
+               RETURNING id, time, connection_type AS "connection_type: ConnectionType", value, updated_at,
+                      host(created_ip) AS created_ip"#,
+            source.via as ConnectionType,
+            input.value,
+            source.ip_text()
         )
         .fetch_one(&mut *tx)
         .await?;
         log_event(
             &mut tx,
-            via,
+            source,
             RecordOp::Create,
             record.id,
             record.value.as_deref(),
@@ -77,7 +97,7 @@ impl Records {
 
     pub async fn update(
         &self,
-        via: ConnectionType,
+        source: Source,
         id: i64,
         input: RecordInput,
     ) -> Result<RecordRow, AppError> {
@@ -87,15 +107,23 @@ impl Records {
             RecordRow,
             r#"UPDATE records SET value = $2, connection_type = $3, updated_at = now()
                WHERE id = $1
-               RETURNING id, time, connection_type AS "connection_type: ConnectionType", value, updated_at"#,
+               RETURNING id, time, connection_type AS "connection_type: ConnectionType", value, updated_at,
+                      host(created_ip) AS created_ip"#,
             id,
             input.value,
-            via as ConnectionType
+            source.via as ConnectionType
         )
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(AppError::NotFound(id))?;
-        log_event(&mut tx, via, RecordOp::Update, id, record.value.as_deref()).await?;
+        log_event(
+            &mut tx,
+            source,
+            RecordOp::Update,
+            id,
+            record.value.as_deref(),
+        )
+        .await?;
         tx.commit().await?;
         self.publish(ChangeEvent::Update {
             record: record.clone(),
@@ -103,37 +131,47 @@ impl Records {
         Ok(record)
     }
 
-    pub async fn delete(&self, via: ConnectionType, id: i64) -> Result<(), AppError> {
+    pub async fn delete(&self, source: Source, id: i64) -> Result<(), AppError> {
         let mut tx = self.pool.begin().await?;
         let deleted = sqlx::query!("DELETE FROM records WHERE id = $1 RETURNING value", id)
             .fetch_optional(&mut *tx)
             .await?
             .ok_or(AppError::NotFound(id))?;
-        log_event(&mut tx, via, RecordOp::Delete, id, deleted.value.as_deref()).await?;
+        log_event(
+            &mut tx,
+            source,
+            RecordOp::Delete,
+            id,
+            deleted.value.as_deref(),
+        )
+        .await?;
         tx.commit().await?;
         self.publish(ChangeEvent::Delete {
             id,
-            connection_type: via,
+            connection_type: source.via,
         });
         Ok(())
     }
 
     /// Runs one WSS/MQTT request and packs the outcome for the wire.
-    pub async fn handle(&self, via: ConnectionType, request: Request) -> RpcResult {
+    pub async fn handle(&self, source: Source, request: Request) -> RpcResult {
         let result = match request {
             Request::List => self
                 .list()
                 .await
                 .map(|records| RpcData::Records { records }),
             Request::Create { value } => self
-                .create(via, RecordInput { value })
+                .create(source, RecordInput { value })
                 .await
                 .map(|record| RpcData::Record { record }),
             Request::Update { id, value } => self
-                .update(via, id, RecordInput { value })
+                .update(source, id, RecordInput { value })
                 .await
                 .map(|record| RpcData::Record { record }),
-            Request::Delete { id } => self.delete(via, id).await.map(|()| RpcData::Deleted { id }),
+            Request::Delete { id } => self
+                .delete(source, id)
+                .await
+                .map(|()| RpcData::Deleted { id }),
         };
         match result {
             Ok(data) => RpcResult::Ok { data },
@@ -152,17 +190,19 @@ impl Records {
 
 async fn log_event(
     tx: &mut Transaction<'_, Postgres>,
-    via: ConnectionType,
+    source: Source,
     op: RecordOp,
     record_id: i64,
     value: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query!(
-        "INSERT INTO record_events (connection_type, op, record_id, value) VALUES ($1, $2, $3, $4)",
-        via as ConnectionType,
+        "INSERT INTO record_events (connection_type, op, record_id, value, ip)
+         VALUES ($1, $2, $3, $4, $5::text::inet)",
+        source.via as ConnectionType,
         op as RecordOp,
         record_id,
-        value
+        value,
+        source.ip_text()
     )
     .execute(&mut **tx)
     .await?;

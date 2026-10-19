@@ -1054,3 +1054,115 @@ async fn user_commands(pool: PgPool) {
     delete_user(&pool, "ALICE").await.unwrap();
     assert!(delete_user(&pool, "alice").await.is_err());
 }
+
+// ---- Who created a record --------------------------------------------------------
+
+#[sqlx::test]
+async fn records_remember_the_creator_ip(pool: PgPool) {
+    let app = TestApp::start(pool.clone()).await;
+    let ip_of = |id: i64| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, Option<String>)>(
+                "SELECT op::text, host(ip) FROM record_events WHERE record_id = $1 ORDER BY time",
+            )
+            .bind(id)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        }
+    };
+
+    // REST without a proxy: the TCP peer.
+    let direct: RecordRow = app
+        .http
+        .post(app.url("/api/records"))
+        .json(&json!({ "value": "direct" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(direct.created_ip.as_deref(), Some("127.0.0.1"));
+
+    // REST behind Caddy: the last X-Forwarded-For entry (what Caddy saw).
+    let proxied: RecordRow = app
+        .http
+        .post(app.url("/api/records"))
+        .header("x-forwarded-for", "198.51.100.1, 203.0.113.7")
+        .json(&json!({ "value": "proxied" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(proxied.created_ip.as_deref(), Some("203.0.113.7"));
+
+    // An update by someone else keeps the creator's IP in the record, and
+    // the event log has who did what.
+    let updated: RecordRow = app
+        .http
+        .put(app.url(&format!("/api/records/{}", proxied.id)))
+        .header("x-forwarded-for", "2001:db8::5")
+        .json(&json!({ "value": "changed" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(updated.created_ip.as_deref(), Some("203.0.113.7"));
+    assert_eq!(
+        ip_of(proxied.id).await,
+        vec![
+            ("create".to_string(), Some("203.0.113.7".to_string())),
+            ("update".to_string(), Some("2001:db8::5".to_string())),
+        ]
+    );
+
+    // WSS: the IP of the handshake.
+    let mut ws = app.ws().await;
+    ws.send(
+        "c1",
+        Request::Create {
+            value: Some("ws".into()),
+        },
+    )
+    .await;
+    let over_ws = record(ws.response("c1").await);
+    assert_eq!(over_ws.created_ip.as_deref(), Some("127.0.0.1"));
+
+    // MQTT: unknown (the broker doesn't pass on the client's address).
+    let mut mqtt = Mqtt::connect(&app.prefix).await;
+    mqtt.send("m1", Request::Create { value: None }).await;
+    let over_mqtt = record(mqtt.response().await.result);
+    assert_eq!(over_mqtt.created_ip, None);
+    assert_eq!(
+        ip_of(over_mqtt.id).await,
+        vec![("create".to_string(), None)]
+    );
+
+    // The list carries it too.
+    let list: Vec<RecordRow> = app
+        .http
+        .get(app.url("/api/records"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ips: Vec<Option<&str>> = list.iter().map(|r| r.created_ip.as_deref()).collect();
+    assert_eq!(
+        ips,
+        [
+            None,
+            Some("127.0.0.1"),
+            Some("203.0.113.7"),
+            Some("127.0.0.1")
+        ]
+    );
+    app.stop().await;
+}

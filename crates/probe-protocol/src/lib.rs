@@ -63,6 +63,10 @@ pub struct RecordRow {
     pub connection_type: ConnectionType,
     pub value: Option<String>,
     pub updated_at: DateTime<Utc>,
+    /// The client IP that created the record (an update keeps it). `None`
+    /// for records created over MQTT: the broker doesn't pass on the
+    /// client's address, so the server can't know it.
+    pub created_ip: Option<String>,
 }
 
 /// Body of `POST /probe/api/records` and `PUT /probe/api/records/{id}`.
@@ -310,6 +314,7 @@ mod tests {
             connection_type: ConnectionType::Mqtt,
             value: Some("hi".into()),
             updated_at: t,
+            created_ip: Some("203.0.113.7".into()),
         }
     }
 

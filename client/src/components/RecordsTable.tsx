@@ -17,6 +17,9 @@ export function RecordsTable() {
           <tr>
             <th className="px-3 py-2 font-medium">Time</th>
             <th className="px-3 py-2 font-medium">Connection type</th>
+            <th className="px-3 py-2 font-medium" title="Who created the record">
+              Created by IP
+            </th>
             <th className="px-3 py-2 font-medium">Value</th>
             <th className="px-3 py-2">
               <span className="sr-only">Actions</span>
@@ -29,7 +32,7 @@ export function RecordsTable() {
           ))}
           {records.length === 0 && (
             <tr>
-              <td colSpan={4} className="px-3 py-6 text-center text-zinc-500">
+              <td colSpan={5} className="px-3 py-6 text-center text-zinc-500">
                 {loading ? "Loading…" : "No records yet."}
               </td>
             </tr>
@@ -61,6 +64,13 @@ function Row({ record }: { record: RecordRow }) {
       </td>
       <td className="px-3 py-1.5">
         <ConnectionBadge type={record.connection_type} />
+      </td>
+      <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-zinc-300">
+        {record.created_ip ?? (
+          <span className="text-zinc-500" title="Not known: created over MQTT (the broker doesn't pass on the client's address), or before IPs were recorded">
+            unknown
+          </span>
+        )}
       </td>
       <td className="w-full break-all px-3 py-1.5">
         {draft === null ? (

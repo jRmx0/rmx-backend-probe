@@ -3,6 +3,7 @@
 //! to a TimescaleDB hypertable and pushed live to all clients.
 
 pub mod auth;
+mod client_ip;
 pub mod config;
 mod error;
 mod http;
