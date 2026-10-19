@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO record_events (connection_type, op, record_id, value) VALUES ($1, $2, $3, $4)",
+  "query": "INSERT INTO record_events (connection_type, op, record_id, value, ip)\n         VALUES ($1, $2, $3, $4, $5::text::inet)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -30,10 +30,11 @@
           }
         },
         "Int8",
+        "Text",
         "Text"
       ]
     },
     "nullable": []
   },
-  "hash": "0b4edf5290327fa196612990445c2466f74716677885d916dae48cafd00e7260"
+  "hash": "c09a31964752b33fe11a0ab867a4de60dde4cb9bdfff205a5e9f8cc93a3689ed"
 }

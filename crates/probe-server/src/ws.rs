@@ -21,7 +21,7 @@ use probe_protocol::{
 };
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::{AppState, auth::CurrentUser};
+use crate::{AppState, auth::CurrentUser, client_ip::ClientIp, records::Source};
 
 /// Keeps idle connections alive through proxies and detects dead peers.
 const PING_INTERVAL: Duration = Duration::from_secs(30);
@@ -35,13 +35,16 @@ pub const SESSION_ENDED: u16 = 4001;
 pub async fn upgrade(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
+    ClientIp(ip): ClientIp,
     ws: WebSocketUpgrade,
 ) -> Response {
+    // Every change over this socket is recorded with the handshake's IP.
+    let source = Source::new(ConnectionType::Wss, Some(ip));
     ws.max_message_size(64 * 1024)
-        .on_upgrade(move |socket| handle(socket, state, user))
+        .on_upgrade(move |socket| handle(socket, state, user, source))
 }
 
-async fn handle(socket: WebSocket, state: AppState, user: CurrentUser) {
+async fn handle(socket: WebSocket, state: AppState, user: CurrentUser, source: Source) {
     let (mut tx, mut rx) = socket.split();
     let mut events = state.records.subscribe();
     let mut ping = tokio::time::interval(PING_INTERVAL);
@@ -52,7 +55,7 @@ async fn handle(socket: WebSocket, state: AppState, user: CurrentUser) {
         let outgoing = tokio::select! {
             msg = rx.next() => match msg {
                 Some(Ok(Message::Text(text))) => {
-                    let response = respond(&state, &text).await;
+                    let response = respond(&state, source, &text).await;
                     ServerMessage::Response { response }
                 }
                 Some(Ok(Message::Close(_))) | None => break,
@@ -99,11 +102,11 @@ async fn handle(socket: WebSocket, state: AppState, user: CurrentUser) {
     tracing::debug!("websocket disconnected");
 }
 
-async fn respond(state: &AppState, text: &str) -> ResponseEnvelope {
+async fn respond(state: &AppState, source: Source, text: &str) -> ResponseEnvelope {
     match parse_request(text.as_bytes()) {
         Ok(env) => ResponseEnvelope {
             request_id: env.request_id,
-            result: state.records.handle(ConnectionType::Wss, env.request).await,
+            result: state.records.handle(source, env.request).await,
         },
         Err(response) => response,
     }

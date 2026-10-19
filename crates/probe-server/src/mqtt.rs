@@ -23,7 +23,11 @@ use rumqttc::{AsyncClient, Event, EventLoop, LastWill, MqttOptions, Outgoing, Pa
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
 
-use crate::{config::MqttConfig, records::Records, ws::parse_request};
+use crate::{
+    config::MqttConfig,
+    records::{Records, Source},
+    ws::parse_request,
+};
 
 const ONLINE: &str = "online";
 const OFFLINE: &str = "offline";
@@ -155,7 +159,11 @@ impl Ctx {
         let response = match parse_request(payload) {
             Ok(env) => ResponseEnvelope {
                 request_id: env.request_id,
-                result: self.records.handle(ConnectionType::Mqtt, env.request).await,
+                // No IP: the broker doesn't pass on the client's address.
+                result: self
+                    .records
+                    .handle(Source::new(ConnectionType::Mqtt, None), env.request)
+                    .await,
             },
             Err(response) => response,
         };

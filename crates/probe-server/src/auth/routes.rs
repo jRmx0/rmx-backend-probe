@@ -1,11 +1,9 @@
 //! HTTP side of the login: the `/probe/api/auth/*` handlers, the session
 //! middleware, and the Origin check against cross-site requests.
 
-use std::net::{IpAddr, SocketAddr};
-
 use axum::{
     Extension, Json,
-    extract::{ConnectInfo, Request, State},
+    extract::{Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -16,7 +14,7 @@ use super::{
     ABSOLUTE_TIMEOUT, CurrentUser,
     token::{CookieLookup, clear_cookie, session_cookie, set_cookie},
 };
-use crate::{AppState, error::AppError};
+use crate::{AppState, client_ip::ClientIp, error::AppError};
 
 /// Responses that carry session data must not be stored by any cache.
 const NO_STORE: HeaderValue = HeaderValue::from_static("no-store");
@@ -27,11 +25,10 @@ const NO_STORE: HeaderValue = HeaderValue::from_static("no-store");
 /// after too many failures.
 pub async fn login(
     State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ClientIp(ip): ClientIp,
     headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> Result<Response, AppError> {
-    let ip = client_ip(&headers, peer.ip());
     let user_agent = headers
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok());
@@ -182,21 +179,6 @@ fn origin_allowed(headers: &HeaderMap, allowed: &[String]) -> bool {
     }
 }
 
-/// The client's IP for rate limiting. Behind Caddy, the TCP peer is Caddy, so
-/// use the last `X-Forwarded-For` entry: the address Caddy itself saw (Caddy
-/// replaces whatever the client sent, and the app's port is not published,
-/// so only Caddy can reach it).
-fn client_ip(headers: &HeaderMap, peer: IpAddr) -> IpAddr {
-    headers
-        .get_all("x-forwarded-for")
-        .iter()
-        .next_back()
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.rsplit(',').next())
-        .and_then(|ip| ip.trim().parse().ok())
-        .unwrap_or(peer)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,18 +238,5 @@ mod tests {
             ("origin", "https://api.rmx.lt"),
         ]);
         assert!(!origin_allowed(&twice, &allowed));
-    }
-
-    #[test]
-    fn client_ip_from_proxy_header() {
-        let peer: IpAddr = "172.18.0.2".parse().unwrap();
-        assert_eq!(client_ip(&HeaderMap::new(), peer), peer);
-        let one = h(&[("x-forwarded-for", "203.0.113.7")]);
-        assert_eq!(client_ip(&one, peer).to_string(), "203.0.113.7");
-        // The last entry is the one the nearest proxy added.
-        let chain = h(&[("x-forwarded-for", "1.2.3.4, 203.0.113.7")]);
-        assert_eq!(client_ip(&chain, peer).to_string(), "203.0.113.7");
-        let junk = h(&[("x-forwarded-for", "nope")]);
-        assert_eq!(client_ip(&junk, peer), peer);
     }
 }

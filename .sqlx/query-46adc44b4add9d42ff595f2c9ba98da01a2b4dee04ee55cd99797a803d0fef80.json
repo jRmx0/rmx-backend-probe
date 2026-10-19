@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE records SET value = $2, connection_type = $3, updated_at = now()\n               WHERE id = $1\n               RETURNING id, time, connection_type AS \"connection_type: ConnectionType\", value, updated_at",
+  "query": "INSERT INTO records (connection_type, value, created_ip) VALUES ($1, $2, $3::text::inet)\n               RETURNING id, time, connection_type AS \"connection_type: ConnectionType\", value, updated_at,\n                      host(created_ip) AS created_ip",
   "describe": {
     "columns": [
       {
@@ -68,12 +68,16 @@
             "name": "updated_at"
           }
         }
+      },
+      {
+        "ordinal": 5,
+        "name": "created_ip",
+        "type_info": "Text",
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
-        "Int8",
-        "Text",
         {
           "Custom": {
             "name": "connection_type",
@@ -85,7 +89,9 @@
               ]
             }
           }
-        }
+        },
+        "Text",
+        "Text"
       ]
     },
     "nullable": [
@@ -93,8 +99,9 @@
       false,
       false,
       true,
-      false
+      false,
+      null
     ]
   },
-  "hash": "1a073f6bfba68f0e043a4033880e1fa06b51315285ad7b4a0def87326a216de8"
+  "hash": "46adc44b4add9d42ff595f2c9ba98da01a2b4dee04ee55cd99797a803d0fef80"
 }

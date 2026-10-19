@@ -3,7 +3,7 @@ import type { RecordRow } from "@/generated/RecordRow";
 import { applyEvent, sortRecords, upsertRecord } from "@/lib/records";
 
 function row(id: number, time: string, value: string | null = null, updated_at = time): RecordRow {
-  return { id, time, connection_type: "https", value, updated_at };
+  return { id, time, connection_type: "https", value, updated_at, created_ip: "203.0.113.7" };
 }
 
 describe("records", () => {
