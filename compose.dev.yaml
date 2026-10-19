@@ -25,11 +25,15 @@ services:
     image: eclipse-mosquitto:2.1-alpine
     # Build the password file from .env, then start the broker.
     # ($$ is a literal $ for the container's shell.)
+    # The image's anonymous /mosquitto/data volume survives restarts and
+    # recreates, and `mosquitto_passwd -c` refuses an existing file, so
+    # delete the old one first.
     command:
       - sh
       - -c
       - |
         set -e
+        rm -f /mosquitto/data/passwd
         mosquitto_passwd -c -b /mosquitto/data/passwd probe-app "$$PROBE_APP_PASSWORD"
         mosquitto_passwd -b /mosquitto/data/passwd probe-web "$$PROBE_WEB_PASSWORD"
         chown mosquitto:mosquitto /mosquitto/data/passwd
