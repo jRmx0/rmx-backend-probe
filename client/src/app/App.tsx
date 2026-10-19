@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { CreateRecordForm } from "@/components/CreateRecordForm";
 import { LoginForm } from "@/components/LoginForm";
-import { MqttLoginForm } from "@/components/MqttLoginForm";
 import { RecordsTable } from "@/components/RecordsTable";
 import { StatusPanel } from "@/components/StatusPanel";
 import { TransportSelector } from "@/components/TransportSelector";
@@ -42,7 +41,7 @@ function Probe() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-lg font-semibold">Backend probe</h1>
-          <p className="text-sm text-zinc-400">Blade of Grass · live records over HTTPS, WSS and MQTT</p>
+          <p className="text-sm text-zinc-400">Blade of Grass · live records over HTTPS and WSS (devices: MQTT)</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <TransportSelector />
@@ -57,7 +56,6 @@ function Probe() {
         </main>
         <aside className="flex flex-col gap-4">
           <StatusPanel />
-          <MqttLoginForm />
         </aside>
       </div>
     </div>

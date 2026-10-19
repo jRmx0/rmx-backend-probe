@@ -35,16 +35,15 @@ services:
         set -e
         rm -f /mosquitto/data/passwd
         mosquitto_passwd -c -b /mosquitto/data/passwd probe-app "$$PROBE_APP_PASSWORD"
-        mosquitto_passwd -b /mosquitto/data/passwd probe-web "$$PROBE_WEB_PASSWORD"
+        mosquitto_passwd -b /mosquitto/data/passwd probe-device "$$PROBE_DEVICE_PASSWORD"
         chown mosquitto:mosquitto /mosquitto/data/passwd
         chmod 0600 /mosquitto/data/passwd
         exec mosquitto -c /mosquitto/config/mosquitto.conf
     environment:
       PROBE_APP_PASSWORD: ${MQTT_PASSWORD:-probe-app-dev}
-      PROBE_WEB_PASSWORD: ${PROBE_WEB_PASSWORD:-probe-web-dev}
+      PROBE_DEVICE_PASSWORD: ${PROBE_DEVICE_PASSWORD:-probe-device-dev}
     ports:
       - "127.0.0.1:11883:1883"
-      - "127.0.0.1:19001:9001"
     volumes:
       - ./dev/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./dev/mosquitto/acl:/mosquitto/config/acl:ro

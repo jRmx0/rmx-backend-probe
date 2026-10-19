@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use probe_protocol::{
-    ChangeEvent, ClientConfig, ConnectionType, Health, RecordRow, Request, RequestEnvelope,
-    ResponseEnvelope, RpcData, RpcResult, ServerMessage, topics,
+    ChangeEvent, ConnectionType, Health, RecordRow, Request, RequestEnvelope, ResponseEnvelope,
+    RpcData, RpcResult, ServerMessage, topics,
 };
 use probe_server::Config;
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
@@ -66,7 +66,6 @@ impl TestApp {
             Config::from_lookup(move |key| match key {
                 "MQTT_TOPIC_PREFIX" => Some(prefix.clone()),
                 "MQTT_CLIENT_ID" => Some(format!("server-{}", prefix.replace('/', "-"))),
-                "MQTT_WS_URL" => Some("ws://example.test/mqtt".into()),
                 "STATIC_DIR" => static_dir.clone(),
                 "ALLOWED_ORIGINS" => Some(format!("{ORIGIN},http://other.allowed.test")),
                 _ => std::env::var(key).ok(),
@@ -254,7 +253,7 @@ impl Ws {
     }
 }
 
-/// A browser-like MQTT client logged in as probe-web.
+/// A device-like MQTT client (like the LTE modem probe) logged in as probe-device.
 struct Mqtt {
     client: AsyncClient,
     id: String,
@@ -269,9 +268,9 @@ impl Mqtt {
         let id = format!("it-{:012x}", rand::random::<u64>() & 0xffff_ffff_ffff);
         let host = std::env::var("MQTT_HOST").unwrap();
         let port = std::env::var("MQTT_PORT").map_or(1883, |p| p.parse().unwrap());
-        let password = std::env::var("PROBE_WEB_PASSWORD").expect("PROBE_WEB_PASSWORD");
+        let password = std::env::var("PROBE_DEVICE_PASSWORD").expect("PROBE_DEVICE_PASSWORD");
         let mut options = MqttOptions::new(&id, host, port);
-        options.set_credentials("probe-web", password);
+        options.set_credentials("probe-device", password);
         options.set_max_packet_size(1024 * 1024, 64 * 1024);
         let (client, mut eventloop) = AsyncClient::new(options, 16);
 
@@ -404,16 +403,15 @@ async fn rest_crud_health_and_config(pool: PgPool) {
         ("ok", true, true)
     );
 
-    let config: ClientConfig = http
-        .get(app.url("/config.json"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(config.mqtt_topic_prefix, app.prefix);
-    assert_eq!(config.mqtt_ws_url, "ws://example.test/mqtt");
+    // config.json (the browser's MQTT settings) is gone with browser MQTT.
+    assert_eq!(
+        http.get(app.url("/config.json"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
 
     // Create
     let res = http
@@ -801,7 +799,7 @@ async fn protected_routes_need_a_session(pool: PgPool) {
 
     for cookie in [None, Some(forged.as_str()), Some(&malformed), Some(&twice)] {
         let c = client(cookie, Some(ORIGIN));
-        for path in ["/api/records", "/api/auth/me", "/config.json"] {
+        for path in ["/api/records", "/api/auth/me"] {
             let res = c.get(app.url(path)).send().await.unwrap();
             assert_eq!(res.status(), 401, "{path} with {cookie:?}");
             let body: serde_json::Value = res.json().await.unwrap();

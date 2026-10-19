@@ -6,7 +6,7 @@
 //! - **Login** (`POST /probe/api/auth/login`) checks the password and creates
 //!   a row in `sessions`. The browser gets a random 256-bit token in an
 //!   `HttpOnly` cookie ([`token`]); the database keeps only its SHA-256.
-//! - **Every protected request** (REST, the WebSocket handshake, config.json)
+//! - **Every protected request** (REST and the WebSocket handshake)
 //!   sends the cookie automatically; [`routes::require_session`] looks the
 //!   hash up and checks both timeouts.
 //! - **Logout** deletes the row, so the cookie is worthless from then on, even

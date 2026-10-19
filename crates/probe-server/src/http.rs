@@ -11,7 +11,7 @@ use axum::{
     response::{IntoResponse, Redirect},
     routing::{any, get, post, put},
 };
-use probe_protocol::{ClientConfig, ConnectionType, Health, RecordInput, RecordRow};
+use probe_protocol::{ConnectionType, Health, RecordInput, RecordRow};
 use tower_http::{
     services::{ServeDir, ServeFile},
     trace::TraceLayer,
@@ -37,7 +37,6 @@ pub fn router(state: AppState) -> Router {
         // the upgrade. That's what fixes iPhones: WebKit sends cookies on
         // WebSocket handshakes (but not basic-auth credentials).
         .route("/ws", get(ws::upgrade))
-        .route("/config.json", get(client_config))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::routes::require_session,
@@ -129,11 +128,4 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         StatusCode::SERVICE_UNAVAILABLE
     };
     (status, Json(body))
-}
-
-async fn client_config(State(state): State<AppState>) -> Json<ClientConfig> {
-    Json(ClientConfig {
-        mqtt_ws_url: state.config.mqtt_ws_url.clone(),
-        mqtt_topic_prefix: state.config.mqtt.topic_prefix.clone(),
-    })
 }

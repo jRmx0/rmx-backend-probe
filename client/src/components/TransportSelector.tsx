@@ -1,11 +1,9 @@
 import { selectTransport } from "@/app/probe";
-import type { ConnectionType } from "@/generated/ConnectionType";
-import { useConnectionStore } from "@/stores/connectionStore";
+import { useConnectionStore, type WebTransport } from "@/stores/connectionStore";
 
-const OPTIONS: { value: ConnectionType; label: string }[] = [
+const OPTIONS: { value: WebTransport; label: string }[] = [
   { value: "https", label: "HTTPS" },
   { value: "wss", label: "WSS" },
-  { value: "mqtt", label: "MQTT" },
 ];
 
 export function TransportSelector() {
