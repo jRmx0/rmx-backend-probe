@@ -14,7 +14,6 @@
     "check": "bun run lint && bun run typecheck && bun test && bun run build"
   },
   "dependencies": {
-    "mqtt": "^5.16.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "zustand": "^5.0.15"

@@ -22,18 +22,19 @@ function Line({ label, tone, children }: { label: string; tone: Tone; children: 
 }
 
 export function StatusPanel() {
-  const { https, wss, mqtt, selected, lastOp } = useConnectionStore();
-  const eventsVia = selected === "mqtt" && mqtt.state === "connected" ? "MQTT" : "WSS";
+  const { https, wss, selected, lastOp } = useConnectionStore();
 
   const httpsTone: Tone = https.state === "ok" ? "good" : https.state === "degraded" ? "warn" : https.state === "down" ? "bad" : "idle";
   const httpsText =
     https.health !== undefined
-      ? `${https.health.status} · db ${https.health.db ? "up" : "down"} · broker ${https.health.mqtt ? "up" : "down"} · v${https.health.version}`
+      ? `${https.health.status} · db ${https.health.db ? "up" : "down"} · v${https.health.version}`
       : (https.detail ?? https.state);
 
   const wssTone: Tone = wss.state === "open" ? "good" : wss.state === "connecting" ? "warn" : "bad";
-  const mqttTone: Tone =
-    mqtt.state === "connected" ? "good" : mqtt.state === "connecting" ? "warn" : mqtt.state === "error" ? "bad" : "idle";
+
+  // The server's own link to the broker (devices reach the server through it).
+  const broker = https.health?.mqtt;
+  const brokerTone: Tone = broker === undefined ? "idle" : broker ? "good" : "bad";
 
   return (
     <section className="rounded-md border border-zinc-800 p-3 text-sm">
@@ -50,16 +51,14 @@ export function StatusPanel() {
         {wss.state}
         {wss.state !== "open" && wss.detail ? ` (${wss.detail})` : ""}
       </Line>
-      <Line label="MQTT" tone={mqttTone}>
-        {mqtt.state}
-        {mqtt.detail ? ` (${mqtt.detail})` : ""}
-        {mqtt.serverStatus ? ` · server ${mqtt.serverStatus}` : ""}
+      <Line label="MQTT" tone={brokerTone}>
+        {broker === undefined ? "unknown" : `server ↔ broker ${broker ? "up" : "down"}`} · devices only
       </Line>
 
       <div className="mt-2 border-t border-zinc-800 pt-2 text-xs text-zinc-400">
         <div>
           Requests via <b className="text-zinc-200">{selected.toUpperCase()}</b>, live events via{" "}
-          <b className="text-zinc-200">{eventsVia}</b>
+          <b className="text-zinc-200">WSS</b>
         </div>
         {lastOp && (
           <div className={lastOp.error ? "text-red-400" : ""}>

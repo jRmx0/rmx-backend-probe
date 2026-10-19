@@ -15,9 +15,6 @@ pub struct Config {
     /// `DB_MAX_CONNECTIONS`, default 5.
     pub db_max_connections: u32,
     pub mqtt: MqttConfig,
-    /// `MQTT_WS_URL`: the broker's WebSocket URL as the *browser* sees it.
-    /// Served in `/probe/config.json`. Empty if unset.
-    pub mqtt_ws_url: String,
     /// `ALLOWED_ORIGINS`, required: comma-separated origins (`scheme://host[:port]`)
     /// whose pages may log in, change data and open the WebSocket. On the VPS
     /// `https://api.rmx.lt`. Everything else gets 403 (CSRF protection).
@@ -77,7 +74,6 @@ impl Config {
                 client_id: get("MQTT_CLIENT_ID").unwrap_or_else(|| "probe-server".into()),
                 topic_prefix,
             },
-            mqtt_ws_url: get("MQTT_WS_URL").unwrap_or_default(),
             allowed_origins: parse_origins(&required("ALLOWED_ORIGINS")?)?,
             static_dir: get("STATIC_DIR").map(PathBuf::from),
         })
@@ -145,7 +141,6 @@ mod tests {
         assert_eq!(c.mqtt.topic_prefix, "probe");
         assert_eq!(c.db_max_connections, 5);
         assert!(c.static_dir.is_none());
-        assert_eq!(c.mqtt_ws_url, "");
         assert_eq!(c.allowed_origins, ["https://api.rmx.lt"]);
     }
 

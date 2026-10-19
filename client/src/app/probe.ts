@@ -1,15 +1,16 @@
 /**
- * Wires the transports to the stores: picks the transport for CRUD, routes
+ * Wires the transports to the stores: picks the transport for CRUD, applies
  * change events, polls health and times every operation.
+ *
+ * The page uses HTTPS and WSS only. MQTT is for devices (like the LTE modem
+ * probe), which talk to the broker on 8883; their changes reach the page as
+ * WSS events like any other.
  */
 
-import type { ChangeEvent } from "@/generated/ChangeEvent";
-import type { ConnectionType } from "@/generated/ConnectionType";
 import { wsUrl } from "@/lib/paths";
-import { useConnectionStore } from "@/stores/connectionStore";
+import { useConnectionStore, type WebTransport } from "@/stores/connectionStore";
 import { useRecordsStore } from "@/stores/recordsStore";
-import { checkSession, fetchClientConfig, fetchHealth, httpsTransport } from "@/transports/https";
-import { MqttConnection, type MqttLogin } from "@/transports/mqtt";
+import { checkSession, fetchHealth, httpsTransport } from "@/transports/https";
 import { rpcTransport, type RecordsTransport } from "@/transports/types";
 import { WssConnection } from "@/transports/wss";
 
@@ -17,48 +18,22 @@ const HEALTH_INTERVAL_MS = 10_000;
 
 const conn = () => useConnectionStore.getState();
 
-/**
- * Change events come over MQTT while MQTT is the selected transport and
- * connected, and over the WebSocket otherwise. Each path is then visibly
- * tested on its own.
- */
-function eventsViaMqtt(): boolean {
-  const s = conn();
-  return s.selected === "mqtt" && s.mqtt.state === "connected";
-}
-
-function onEvent(source: "wss" | "mqtt", event: ChangeEvent) {
-  if ((source === "mqtt") === eventsViaMqtt()) useRecordsStore.getState().apply(event);
-}
-
 const wss = new WssConnection(wsUrl(), {
   onState: (state, detail) => {
     conn().setWss(state, detail);
     // After a (re)connect, events may have been missed: list again.
-    if (state === "open" && !eventsViaMqtt()) void reload();
+    if (state === "open") void reload();
     // A browser doesn't tell scripts why a handshake failed (a 401 looks like
     // any other failure), and the server closes the socket with 4001 when the
     // session ends. Either way, ask the server whether we're still logged in.
     if (state === "closed") void checkSession();
   },
-  onEvent: (event) => onEvent("wss", event),
+  onEvent: (event) => useRecordsStore.getState().apply(event),
 });
 
-const mqtt = new MqttConnection({
-  onState: (state, detail) => {
-    conn().setMqtt(state, detail);
-    if (state === "connected" && conn().selected === "mqtt") void reload();
-  },
-  onEvent: (event) => onEvent("mqtt", event),
-  onServerStatus: (status) => conn().setServerStatus(status),
-});
-
-export const mqttClientId = mqtt.id;
-
-const transports: Record<ConnectionType, RecordsTransport> = {
+const transports: Record<WebTransport, RecordsTransport> = {
   https: httpsTransport,
   wss: rpcTransport("wss", wss.send),
-  mqtt: rpcTransport("mqtt", mqtt.send),
 };
 
 /** Runs one operation over the selected transport and records its timing. */
@@ -103,22 +78,9 @@ export async function deleteRecord(id: number) {
   useRecordsStore.getState().remove(id);
 }
 
-export function selectTransport(t: ConnectionType) {
+export function selectTransport(t: WebTransport) {
   conn().select(t);
   void reload();
-}
-
-export function connectMqtt(login: Omit<MqttLogin, "url" | "prefix">) {
-  const config = conn().config;
-  if (!config?.mqtt_ws_url) {
-    conn().setMqtt("error", "the server has no MQTT_WS_URL configured");
-    return;
-  }
-  mqtt.connect({ ...login, url: config.mqtt_ws_url, prefix: config.mqtt_topic_prefix });
-}
-
-export function disconnectMqtt() {
-  mqtt.disconnect();
 }
 
 async function checkHealth() {
@@ -132,20 +94,15 @@ async function checkHealth() {
 
 /**
  * Starts the WebSocket and health polling. Returns a stop function. Runs only
- * while logged in: the app unmounts on logout, which stops everything
- * (including MQTT, which has its own login).
+ * while logged in: the app unmounts on logout, which stops everything.
  */
 export function startProbe(): () => void {
   wss.start();
   void checkHealth();
   const timer = setInterval(checkHealth, HEALTH_INTERVAL_MS);
-  fetchClientConfig()
-    .then((c) => conn().setConfig(c))
-    .catch((err: unknown) => console.error("config.json failed", err));
   return () => {
     clearInterval(timer);
     wss.stop();
-    mqtt.disconnect();
     // Don't leave data on screen (or in memory) for the next login.
     useRecordsStore.getState().setAll([]);
   };

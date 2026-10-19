@@ -1,6 +1,10 @@
-# Same as the VPS: both probe logins may use probe/# only.
+# Local development broker. On the VPS each login is narrower (probe-device
+# may only use probe/req/probe-device, probe/res/probe-device, probe/events/#
+# and probe/status/#); here both may use probe/#, because the integration
+# tests give every test its own topic prefix (probe/it-<random>).
 user probe-app
 topic readwrite probe/#
 
-user probe-web
+# A device (like the LTE modem probe), used by the integration tests.
+user probe-device
 topic readwrite probe/#

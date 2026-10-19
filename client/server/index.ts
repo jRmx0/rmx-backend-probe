@@ -74,7 +74,6 @@ const server = serve<WsData>({
     "/probe": Response.redirect("/probe/", 302),
     "/probe/api/*": proxy,
     "/probe/health": proxy,
-    "/probe/config.json": proxy,
     "/probe/ws": (req: Request, server: Server<WsData>) => {
       if (server.upgrade(req, { data: { queue: [], headers: forwardedHeaders(req) } })) return undefined;
       return new Response("WebSocket upgrade expected", { status: 400 });

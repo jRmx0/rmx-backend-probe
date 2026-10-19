@@ -5,9 +5,10 @@ robotic lawn mower. It rehearses the full production workflow of the future
 `rmx-backend` (Rust) and `rmx-client` (React + Bun) on a toy problem:
 
 > A web page with a live table `records(time, connection_type, value)` and full
-> CRUD over a selectable transport (**HTTPS REST**, **WSS**, or **MQTT** over
-> WebSockets). Every change is logged to a TimescaleDB hypertable and pushed
-> live to every open client, whatever transport made it.
+> CRUD over a selectable transport (**HTTPS REST** or **WSS**), plus the same
+> CRUD for devices over **MQTT** (like the LTE modem probe in
+> `rmx-mower-modem-probe`). Every change is logged to a TimescaleDB hypertable
+> and pushed live to every open page, whatever transport made it.
 
 The same stack as production: a Rust workspace (axum, sqlx, rumqttc, tokio), a
 TypeScript + React client on Bun's bundler, TimescaleDB, Mosquitto, GitHub
@@ -27,11 +28,16 @@ Actions, images on GHCR.
 ## How it works
 
 ```
-browser ──HTTPS──▶ Caddy ──▶ probe-server :8080 ──▶ TimescaleDB
-   │      /probe/api, /probe/ws        │  ▲
-   │                                   ▼  │ mqtt:1883 (plain, internal)
-   └──MQTT over WSS──▶ Caddy ──▶ Mosquitto
+browser ──HTTPS/WSS :443──▶ Caddy ──▶ probe-server :8080 ──▶ TimescaleDB
+          /probe/api, /probe/ws             ▲
+                                            │ mqtt:1883 (plain, internal)
+device ──MQTT over TLS :8883──────────▶ Mosquitto
 ```
+
+This is the production layout: **browsers never speak MQTT**. Only devices
+(mowers, the modem probe) and the server do, directly with Mosquitto on 8883;
+Caddy only renews the certificate Mosquitto uses. Browsers talk to the server
+over HTTPS and its WebSocket, with their session.
 
 - **One records service** (`crates/probe-server/src/records.rs`) does every
   create/update/delete in a transaction that also appends to `record_events`,
@@ -39,15 +45,14 @@ browser ──HTTPS──▶ Caddy ──▶ probe-server :8080 ──▶ Timesc
 - **HTTPS**: REST under `/probe/api/records`.
 - **WSS**: `/probe/ws`, JSON request/response with a `request_id`, plus
   server-pushed change events.
-- **MQTT**: the server subscribes to `probe/req/+` and answers on
+- **MQTT** (devices): the server subscribes to `probe/req/+` and answers on
   `probe/res/<client-id>`; change events go to `probe/events/records`.
 - **Login**: the app's own login page and server-side sessions in a cookie
-  protect the API, the WebSocket and `config.json` (see
+  protect the API and the WebSocket (see
   [Login and sessions](#login-and-sessions)).
 - **Live updates**: every change goes to every WebSocket and to the MQTT
-  events topic. In the UI, events come over MQTT while MQTT is the selected
-  (and connected) transport, and over the WebSocket otherwise, so each path is
-  visibly tested.
+  events topic, so the page sees a device's changes live (over WSS), and
+  devices see the page's.
 
 ### Database
 
@@ -204,12 +209,12 @@ router's `protected` group (`crates/probe-server/src/http.rs`), which requires
 a session, so a new route is protected unless someone deliberately puts it in
 the public group.
 
-**MQTT is a separate login.** The browser's MQTT connection still logs in to
-Mosquitto as `probe-web` with a typed password, independent of the web login
-(the probe tests the transport, so this is out of scope here). **Production
-should not do this:** only the backend should talk to Mosquitto, and browsers
-should go through the backend's WebSocket with their session, so there is one
-login and one place that checks it.
+**MQTT is for devices only.** Browsers don't talk to Mosquitto: they go
+through the server's WebSocket with their session, so there is one login for
+people and one place that checks it. Devices have their own broker logins
+(e.g. `probe-device` on the VPS), limited by the broker's ACL to their own
+topics. (Until 2026-10-20 the page also spoke MQTT over WebSockets as
+`probe-web`; that was removed to match production.)
 
 ### Users
 
@@ -282,8 +287,9 @@ Create a login once (the dev database keeps it), then open
 cargo run -p probe-server -- create-user dev     # any password of 12+ characters
 ```
 
-For MQTT, log in as `probe-web` with the `PROBE_WEB_PASSWORD` from `.env`
-(`probe-web-dev`).
+To try MQTT like a device, use any MQTT client on `127.0.0.1:11883` as
+`probe-device` with the `PROBE_DEVICE_PASSWORD` from `.env`
+(`probe-device-dev`), publishing to `probe/req/<client-id>`.
 
 Local ports (chosen so they don't clash with a Postgres or Mosquitto
 installed on the PC):
@@ -293,19 +299,17 @@ installed on the PC):
 | 3000 | Bun dev server (client with hot reload) |
 | 8080 | probe-server |
 | 55432 | TimescaleDB (`postgres://probe:probe-dev@127.0.0.1:55432/probe`) |
-| 11883 | Mosquitto, plain MQTT (the server) |
-| 19001 | Mosquitto, MQTT over WebSockets (the browser) |
+| 11883 | Mosquitto, plain MQTT (the server and test devices) |
 
 **How the dev server works.** `bun run dev` runs `client/server/index.ts`:
 `Bun.serve` with an HTML import of `public/index.html`, so Bun bundles the app
 on the fly with hot module reloading and Tailwind (`bun-plugin-tailwind` in
 `bunfig.toml`). The same server proxies `/probe/api/*`, `/probe/health`,
-`/probe/config.json` and the `/probe/ws` WebSocket to probe-server (passing
+and the `/probe/ws` WebSocket to probe-server (passing
 on the session cookie and `Origin`, which probe-server checks)
 (`PROBE_BACKEND_URL`, default `http://127.0.0.1:8080`). The browser sees a
 single origin with the same paths as production, so there is no CORS and no
-environment-specific URL in the client code. Only MQTT goes elsewhere: its URL
-comes from `/probe/config.json`.
+environment-specific URL in the client code.
 
 Stop the stack with `docker compose -f compose.dev.yaml down` (add `-v` to
 also delete the database volume).
@@ -318,7 +322,6 @@ docker run --rm -p 8080:8080 `
   -e DATABASE_URL=postgres://probe:probe-dev@host.docker.internal:55432/probe `
   -e MQTT_HOST=host.docker.internal -e MQTT_PORT=11883 `
   -e MQTT_USERNAME=probe-app -e MQTT_PASSWORD=probe-app-dev `
-  -e MQTT_WS_URL=ws://127.0.0.1:19001 `
   -e ALLOWED_ORIGINS=http://localhost:8080 `
   rmx-backend-probe:local
 ```
@@ -338,9 +341,9 @@ Then open <http://localhost:8080/probe/>.
 The integration tests start the real server on a random port; `#[sqlx::test]`
 gives each test a fresh migrated database, and each test uses its own MQTT
 topic prefix, so they run in parallel. They cover REST, WSS and MQTT CRUD,
-cross-transport live events, health, `config.json`, the `record_events` log,
+cross-transport live events, health, the `record_events` log,
 the retained server status and graceful shutdown, and the login: wrong
-password and unknown user, protected routes (REST, WebSocket, config.json)
+password and unknown user, protected routes (REST, WebSocket)
 without, with a forged and with a duplicated cookie, expired and idle
 sessions, logout and "log out everywhere", password change, session
 fixation, foreign `Origin`s (REST, login, WebSocket) and the rate limit.
@@ -411,7 +414,6 @@ This is the contract the VPS side (repo `rmx-vps`) can rely on.
 | `MQTT_PORT` | no | `1883` | default 1883 |
 | `MQTT_USERNAME` | yes | `probe-app` | ACL: `probe/#` |
 | `MQTT_PASSWORD` | yes | (secret, server-side `.env`) | never logged |
-| `MQTT_WS_URL` | yes for MQTT in the UI | `wss://mqtt.rmx.lt/mqtt` | the broker's WebSocket URL **as the browser sees it**, served in `/probe/config.json` |
 | `ALLOWED_ORIGINS` | **yes** | `https://api.rmx.lt` | comma-separated origins of the page. Others can't log in, change data or open the WebSocket (403). The server doesn't start without it |
 | `RUST_LOG` | no | `info` | default `info` |
 | `BIND_ADDR` | no | `0.0.0.0:8080` | already set in the image |
@@ -437,19 +439,18 @@ needs no `basic_auth` in front of it:
 | `/probe/health` | public | `{"status":"ok","db":true,"mqtt":true,"version":"0.1.0"}`, 200 or 503 |
 | `/probe/api/records[/{id}]`, `/probe/api/auth/me`, `/probe/api/auth/logout-all` | session | REST |
 | `/probe/ws` | session | WebSocket (Caddy proxies upgrades by default) |
-| `/probe/config.json` | session | `{"mqtt_ws_url":"wss://mqtt.rmx.lt/mqtt","mqtt_topic_prefix":"probe"}` |
 
 **Proxy requirements:** pass on `Host`, `Origin` and `Cookie` unchanged (Caddy
 does by default) and set `X-Forwarded-For` (Caddy does; the login rate limit
 uses it). **First user:** see [Users](#users).
 
-**Browser MQTT:** the client connects with mqtt.js to `MQTT_WS_URL`
-(production `wss://mqtt.rmx.lt/mqtt`: Caddy terminates TLS and proxies to a
-Mosquitto `websockets` listener) as `probe-web`, typing the password into the
-UI. It uses client ids `web-<12 hex>`, so the broker must not force
-`use_username_as_clientid` on that listener if several tabs should work at once.
-It needs read/write on `probe/#` (narrowest: write `probe/req/+`, read
-`probe/res/+`, `probe/events/#`, `probe/status/#`).
+**MQTT devices** connect to the broker's public TLS listener (VPS:
+`mqtts://mqtt.rmx.lt:8883`, `use_username_as_clientid`), so a device's client
+id is its login, e.g. `probe-device`. Its ACL needs: write
+`probe/req/<login>`, read `probe/res/<login>`, `probe/events/#`,
+`probe/status/#`. The broker needs no WebSocket listener and Caddy no MQTT
+route: browsers don't use MQTT. `MQTT_WS_URL` and `/probe/config.json` were
+removed (an old `MQTT_WS_URL` in the environment is ignored).
 
 **Deploy job:** every push to `main` deploys automatically. After the `image`
 job, the `deploy` job in `ci.yml` connects over SSH as the VPS user `deploy`

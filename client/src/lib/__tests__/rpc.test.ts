@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { wsUrl } from "@/lib/paths";
 import { expectRecords, PendingRequests, RpcError } from "@/lib/rpc";
-import { mqttTopics, randomClientId } from "@/lib/topics";
 
 describe("PendingRequests", () => {
   test("resolves the matching request with its data", async () => {
@@ -43,15 +42,5 @@ describe("addresses", () => {
   test("WebSocket URL follows the page scheme", () => {
     expect(wsUrl({ protocol: "https:", host: "api.rmx.lt" })).toBe("wss://api.rmx.lt/probe/ws");
     expect(wsUrl({ protocol: "http:", host: "localhost:3000" })).toBe("ws://localhost:3000/probe/ws");
-  });
-
-  test("MQTT topics match the Rust layout", () => {
-    expect(mqttTopics("probe", "web-1")).toEqual({
-      request: "probe/req/web-1",
-      response: "probe/res/web-1",
-      events: "probe/events/records",
-      serverStatus: "probe/status/server",
-    });
-    expect(randomClientId()).toMatch(/^web-[0-9a-f]{12}$/);
   });
 });

@@ -220,16 +220,6 @@ pub struct Health {
     pub version: String,
 }
 
-/// `GET /probe/config.json`: runtime settings for the browser client.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct ClientConfig {
-    /// MQTT over WebSockets URL for mqtt.js, e.g. `wss://mqtt.rmx.lt/mqtt`.
-    pub mqtt_ws_url: String,
-    /// Topic prefix, normally `probe`.
-    pub mqtt_topic_prefix: String,
-}
-
 /// Body of `POST /probe/api/auth/login`.
 #[derive(Clone, Deserialize, Serialize, TS)]
 #[ts(export)]

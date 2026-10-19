@@ -1,5 +1,4 @@
 import type { ApiError } from "@/generated/ApiError";
-import type { ClientConfig } from "@/generated/ClientConfig";
 import type { Health } from "@/generated/Health";
 import type { LoginRequest } from "@/generated/LoginRequest";
 import type { Me } from "@/generated/Me";
@@ -46,10 +45,6 @@ export async function fetchHealth(): Promise<Health> {
   const res = await fetch(`${BASE}/health`, { cache: "no-store" });
   if (res.status !== 200 && res.status !== 503) throw new Error(`HTTP ${res.status}`);
   return (await res.json()) as Health;
-}
-
-export function fetchClientConfig(): Promise<ClientConfig> {
-  return call<ClientConfig>("GET", "/config.json");
 }
 
 // ---- Login -------------------------------------------------------------------
