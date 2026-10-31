@@ -386,7 +386,7 @@ Dockerfile's base images.
 
 This is the contract the VPS side (repo `rmx-vps`) can rely on.
 
-**Image:** `ghcr.io/jrmx0/rmx-backend-probe`, public, linux/amd64.
+**Image:** `ghcr.io/rmx-lt/rmx-backend-probe`, public, linux/amd64.
 
 | Tag | Meaning |
 |---|---|
@@ -456,7 +456,7 @@ removed (an old `MQTT_WS_URL` in the environment is ignored).
 job, the `deploy` job in `ci.yml` connects over SSH as the VPS user `deploy`
 and sends only the tag `sha-<short>`. That user's key is restricted to one
 forced command, the script `rmx-deploy-probe` (source:
-[rmx-vps `services/probe/deploy/`](https://github.com/jRmx0/rmx-vps/tree/main/services/probe/deploy)).
+[rmx-vps `services/probe/deploy/`](https://github.com/rmx-lt/rmx-vps/tree/main/services/probe/deploy)).
 It checks the tag, pulls the image, restarts `probe-app`, waits for
 `/probe/health`, and rolls back to the previous tag if the new one isn't
 healthy (the job then fails). If the probe is switched off on the VPS, the
