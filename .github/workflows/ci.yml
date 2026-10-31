@@ -102,7 +102,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/jrmx0/rmx-backend-probe
+          images: ghcr.io/rmx-lt/rmx-backend-probe
           tags: |
             type=sha,prefix=sha-,format=short,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}

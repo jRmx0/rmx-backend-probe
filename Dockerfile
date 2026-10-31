@@ -33,7 +33,7 @@ RUN cargo build --release --locked -p probe-server
 
 # ---- 3. Runtime: distroless (glibc + CA certs), runs as uid 65532 ----------
 FROM gcr.io/distroless/cc-debian13:nonroot
-LABEL org.opencontainers.image.source="https://github.com/jRmx0/rmx-backend-probe" \
+LABEL org.opencontainers.image.source="https://github.com/rmx-lt/rmx-backend-probe" \
       org.opencontainers.image.description="Blade of Grass backend probe (CRUD over HTTPS, WSS and MQTT)" \
       org.opencontainers.image.licenses="Apache-2.0"
 WORKDIR /app

@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/jRmx0/rmx-backend-probe"
+repository = "https://github.com/rmx-lt/rmx-backend-probe"
 publish = false
 
 [workspace.dependencies]
